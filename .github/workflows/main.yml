@@ -14,6 +14,7 @@ jobs:
         server: 34.148.175.45
         username:  service-monica-studyplan
         password: ${{ secrets.password }}
+        protocol: ftps
         exclude: |
           **/.git*
           **/.git*/**
