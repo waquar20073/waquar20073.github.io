@@ -237,7 +237,6 @@
                 ).then((response) => response.json())
                 .then((data) => {
                     document.getElementById('visits').innerText = data.visit_count;
-                    .
                 }).catch(err => console.error(err));
         }
         visitCounter();
