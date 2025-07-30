@@ -1,0 +1,16 @@
+create a dashboard where i can see 
+between i can give i) a tag name and it will automatically use the last tag before that as the second tag or ii) i give two tag names in the same branch and repo
+and i will find the following stats - also obviously it will need the input of repository name as well
+it should get all the repositories in the configured group id, group id i will configure in config.json and validate that the repo name i entered is among those repos in the group id given
+
+then it provide stats like
+which developer added how many lines, or removed or modified
+and then further i can check the exact lines which were added or removed or modified; which i will show in UI dashboard i develop with ur help
+
+also there should be another thing that for the given tag, compare from the last tag
+and do provide the same stats, for all the repositories in the given gorup id
+if some repo doesnt have that tag, ignore that repo
+
+
+first please provide complete PRD for the backend script to be developed in java preferrably
+with list of all the endpoints and thei rapi specs
