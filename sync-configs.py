@@ -326,11 +326,11 @@ def main():
     parser.add_argument("--mr-labels", default="", help="comma separated labels to apply to MR")
     parser.add_argument("--schemas-dir", default="schemas", help="directory in repo (or local) where service schemas live (optional)")
     parser.add_argument("--fetch-depth", type=int, default=0, help="Git fetch depth. Use 0 for full history (required for reliable 3-way merge).")
-    args = parser.parse_args(                                            *                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 )
+    args = parser.parse_args()
 
     token = os.environ.get(args.gitlab_token_env)
     if not token:
-        print(colored(f"ERROR: GitLab token not found in env {args.gitlab_token_env}", "red") )
+        print(colored(f"ERROR: GitLab token not found in env {args.gitlab_token_env}", "red"))
         sys.exit(1)
 
     tmpdir_base = tempfile.mkdtemp(prefix="config-sync-")
@@ -339,7 +339,7 @@ def main():
 
     try:
         for tgt_branch in args.target_branches:
-            print(colored(f"\n=== Processing target branch: {tgt_branch} ===", "cyan") )
+            print(colored(f"\n=== Processing target branch: {tgt_branch} ===", "cyan"))
             tmpdir = Path(tmpdir_base) / tgt_branch.replace("/", "_")
             tmpdir.mkdir(parents=True, exist_ok=True)
 
@@ -347,7 +347,7 @@ def main():
             try:
                 clone_repo(args.repo_url, token, branch=tgt_branch, tmpdir=str(tmpdir), depth=args.fetch_depth if args.fetch_depth > 0 else None)
             except subprocess.CalledProcessError as e:
-                print(colored(f"ERROR cloning repo for branch {tgt_branch}: {e.stderr}", "red") )
+                print(colored(f"ERROR cloning repo for branch {tgt_branch}: {e.stderr}", "red"))
                 overall_success = False
                 continue
 
@@ -356,7 +356,7 @@ def main():
                 try:
                     subprocess.run(["git", "fetch", "origin", args.source_branch], cwd=str(tmpdir), check=True, capture_output=True)
                 except subprocess.CalledProcessError as e:
-                    print(colored(f"Warning: failed to fetch source branch {args.source_branch}: {e.stderr}", "yellow") )
+                    print(colored(f"Warning: failed to fetch source branch {args.source_branch}: {e.stderr}", "yellow"))
 
             config_path_in_repo = tmpdir / args.config_file
             policy = load_json(config_path_in_repo) if config_path_in_repo.exists() else load_json(Path(args.config_file))
@@ -380,7 +380,7 @@ def main():
                     ancestor_json = {}
                     if ancestor_commit_sha:
                         try:
-                            ancestor_blob_path = f"{ancestor_commit_sha}:{relative_path}"
+                            ancestor_blob_path = f"{ancestor_commit_sha}:{relative_path.as_posix()}"
                             ancestor_content = subprocess.run(["git", "show", ancestor_blob_path], cwd=str(tmpdir), capture_output=True, text=True).stdout
                             if ancestor_content:
                                 ancestor_json = json.loads(ancestor_content)
@@ -389,7 +389,8 @@ def main():
 
                     src_json = {}
                     try:
-                        src_blob_ref = f"{source_ref}:{Path(service) / args.from_env / args.source_config_filename}"
+                        source_path = Path(service) / args.from_env / args.source_config_filename
+                        src_blob_ref = f"{source_ref}:{source_path.as_posix()}"
                         src_content = subprocess.run(["git", "show", src_blob_ref], cwd=str(tmpdir), capture_output=True, text=True, check=True).stdout
                         src_json = json.loads(src_content)
                     except (subprocess.CalledProcessError, json.JSONDecodeError):
