@@ -1,0 +1,31 @@
+{
+  "defaults": {
+    "scalar": "replace",
+    "list": "union",
+    "on_missing_in_source": "keep"
+  },
+  "ignore_keys": [
+    "dbUrl",
+    "dbPassword",
+    "secrets.*",
+    "aws.credentials.*"
+  ],
+  "csv_keys": [
+    "env-var-1",
+    "feature.flags"
+  ],
+  "overrides": [
+    {
+      "match": "feature.flags",
+      "strategy": "append"
+    },
+    {
+      "match": "service.endpoints",
+      "strategy": "union"
+    },
+    {
+      "match": "secrets.*",
+      "strategy": "keep-target-on-conflict"
+    }
+  ]
+}
