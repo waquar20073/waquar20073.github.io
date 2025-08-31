@@ -101,12 +101,15 @@ def list_to_csv_string(lst: List[str], sep: str = ", "):
     """Converts a list of strings into a CSV string."""
     return sep.join(lst)
 
-def merge_values(key: str, src_val, tgt_val, strat: str, csv_keys: List[str], csv_sep: str):
+def merge_values(key: str, src_val, tgt_val, strat: str, csv_sep: str):
     """Merges two values based on a given strategy."""
     if src_val is None and tgt_val is None:
         return None, False
 
-    if key_matches_any(csv_keys, key) and (isinstance(src_val, str) or isinstance(tgt_val, str)):
+    is_csv = (isinstance(src_val, str) and "," in src_val) or \
+             (isinstance(tgt_val, str) and "," in tgt_val)
+
+    if is_csv:
         src_list = parse_csv_string_to_list(src_val or "", csv_sep)
         tgt_list = parse_csv_string_to_list(tgt_val or "", csv_sep)
         if strat == "append":
@@ -173,7 +176,6 @@ def merge_json_configs_three_way(
     tgt_json: Dict[str, Any],
     ignore_keys: List[str],
     policy: Dict[str, Any],
-    csv_keys: List[str],
     csv_sep: str = ",",
 ) -> Tuple[Dict[str, Any], List[str], List[str]]:
     """Performs a 3-way merge of JSON configurations, detecting conflicts."""
@@ -222,14 +224,14 @@ def merge_json_configs_three_way(
 
         strat = get_strategy_for_key(k)
         if not strat:
-            if isinstance(src_val, list) or isinstance(tgt_val, list):
-                strat = default_list
-            elif isinstance(src_val, str) and k in csv_keys:
+            is_csv = (isinstance(src_val, str) and "," in src_val) or \
+                     (isinstance(tgt_val, str) and "," in tgt_val)
+            if isinstance(src_val, list) or isinstance(tgt_val, list) or is_csv:
                 strat = default_list
             else:
                 strat = default_scalar
 
-        merged_val, changed = merge_values(k, src_val, tgt_val, strat, csv_keys, csv_sep)
+        merged_val, changed = merge_values(k, src_val, tgt_val, strat, csv_sep)
         if changed:
             merged_flat[k] = merged_val
             changes.append(f"Updated {k}: {repr(tgt_val)} -> {repr(merged_val)}")
@@ -310,6 +312,8 @@ def main():
     parser.add_argument("--config-file", default="sync-config.json", help="path inside repo or local path")
     parser.add_argument("--source-branch", default="develop")
     parser.add_argument("--source-commit", help="Source commit hash to sync from (overrides source-branch)")
+    parser.add_argument("--source-config-filename", default="config.json", help="Filename of the config in the source directory")
+    parser.add_argument("--target-config-filename", default="config.json", help="Filename of the config in the target directory")
     parser.add_argument("--target-branches", nargs="+", required=True, help="one or more target branches (release branches)")
     parser.add_argument("--from-env", default="dev")
     parser.add_argument("--to-env", nargs="+", required=True)
@@ -322,11 +326,11 @@ def main():
     parser.add_argument("--mr-labels", default="", help="comma separated labels to apply to MR")
     parser.add_argument("--schemas-dir", default="schemas", help="directory in repo (or local) where service schemas live (optional)")
     parser.add_argument("--fetch-depth", type=int, default=0, help="Git fetch depth. Use 0 for full history (required for reliable 3-way merge).")
-    args = parser.parse_args()
+    args = parser.parse_args(                                            *                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 )
 
     token = os.environ.get(args.gitlab_token_env)
     if not token:
-        print(colored(f"ERROR: GitLab token not found in env {args.gitlab_token_env}", "red"))
+        print(colored(f"ERROR: GitLab token not found in env {args.gitlab_token_env}", "red") )
         sys.exit(1)
 
     tmpdir_base = tempfile.mkdtemp(prefix="config-sync-")
@@ -335,7 +339,7 @@ def main():
 
     try:
         for tgt_branch in args.target_branches:
-            print(colored(f"\n=== Processing target branch: {tgt_branch} ===", "cyan"))
+            print(colored(f"\n=== Processing target branch: {tgt_branch} ===", "cyan") )
             tmpdir = Path(tmpdir_base) / tgt_branch.replace("/", "_")
             tmpdir.mkdir(parents=True, exist_ok=True)
 
@@ -343,7 +347,7 @@ def main():
             try:
                 clone_repo(args.repo_url, token, branch=tgt_branch, tmpdir=str(tmpdir), depth=args.fetch_depth if args.fetch_depth > 0 else None)
             except subprocess.CalledProcessError as e:
-                print(colored(f"ERROR cloning repo for branch {tgt_branch}: {e.stderr}", "red"))
+                print(colored(f"ERROR cloning repo for branch {tgt_branch}: {e.stderr}", "red") )
                 overall_success = False
                 continue
 
@@ -358,7 +362,6 @@ def main():
             policy = load_json(config_path_in_repo) if config_path_in_repo.exists() else load_json(Path(args.config_file))
 
             ignore_keys = policy.get("ignore_keys", [])
-            csv_keys = policy.get("csv_keys", [])
             
             ancestor_commit_sha = compute_three_way_ancestor(str(tmpdir), source_ref, tgt_branch)
 
@@ -371,7 +374,7 @@ def main():
                 for to_env in args.to_env:
                     print(colored(f"\n-- Processing: {service}/{to_env}", "blue") )
 
-                    relative_path = Path(service) / to_env / "config.json"
+                    relative_path = Path(service) / to_env / args.target_config_filename
                     tgt_file_path = tmpdir / relative_path
 
                     ancestor_json = {}
@@ -386,7 +389,7 @@ def main():
 
                     src_json = {}
                     try:
-                        src_blob_ref = f"{source_ref}:{Path(service) / args.from_env / 'config.json'}"
+                        src_blob_ref = f"{source_ref}:{Path(service) / args.from_env / args.source_config_filename}"
                         src_content = subprocess.run(["git", "show", src_blob_ref], cwd=str(tmpdir), capture_output=True, text=True, check=True).stdout
                         src_json = json.loads(src_content)
                     except (subprocess.CalledProcessError, json.JSONDecodeError):
@@ -397,7 +400,7 @@ def main():
 
                     merged_json, warnings_conflicts, changes = merge_json_configs_three_way(
                         ancestor_json=ancestor_json, src_json=src_json, tgt_json=tgt_json,
-                        ignore_keys=ignore_keys, policy=policy, csv_keys=csv_keys, csv_sep=args.csv_sep
+                        ignore_keys=ignore_keys, policy=policy, csv_sep=args.csv_sep
                     )
 
                     if warnings_conflicts:

@@ -10,10 +10,6 @@
     "secrets.*",
     "aws.credentials.*"
   ],
-  "csv_keys": [
-    "env-var-1",
-    "feature.flags"
-  ],
   "overrides": [
     {
       "match": "feature.flags",
