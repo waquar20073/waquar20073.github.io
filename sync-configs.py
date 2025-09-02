@@ -12,11 +12,14 @@ python config_sync.py \
   --target-branches release/1.4 release/1.5 \
   --from-env dev \
   --to-env sit uat \
-  --services microservice-1 microservice-2 \
+  --services microservice-1 microservice-26 \
   --config-file sync-config.json \
   --schemas-dir schemas/
 """
 
+from pathlib import Path
+from typing import Dict, Any, Tuple, List
+import random
 import os
 import sys
 import argparse
@@ -27,14 +30,11 @@ import fnmatch
 import difflib
 import subprocess
 import requests
-import random
-from pathlib import Path
-from typing import Dict, Any, Tuple, List
 
 # -----------------------------
 # Utilities: flatten / unflatten
 # -----------------------------
-def flatten(d: Dict[str, Any], parent_key: str = "", sep: str = "."):
+def flatten(d: Dict[str, Any], parent_key: str = "", sep: str = "|"):
     """Flattens a nested dictionary into a single level with concatenated keys."""
     items = {}
     for k, v in d.items():
@@ -45,7 +45,7 @@ def flatten(d: Dict[str, Any], parent_key: str = "", sep: str = "."):
             items[new_key] = v
     return items
 
-def unflatten(flat: Dict[str, Any], sep: str = "."):
+def unflatten(flat: Dict[str, Any], sep: str = "|"):
     """Converts a flattened dictionary back into a nested dictionary."""
     result = {}
     for compound_key, value in flat.items():
@@ -81,7 +81,7 @@ def load_json(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {}
     with open(path, "r") as f:
-        return json.load(f) or {}
+        return json.load(f, object_pairs_hook=dict) or {}
 
 def key_matches_any(patterns: List[str], key: str) -> bool:
     """Checks if a key matches any of the given wildcard patterns."""
@@ -97,7 +97,7 @@ def parse_csv_string_to_list(s: str, sep: str = ","):
     """Parses a CSV string into a list of strings."""
     return [seg.strip() for seg in str(s).split(sep) if seg.strip()]
 
-def list_to_csv_string(lst: List[str], sep: str = ", "):
+def list_to_csv_string(lst: List[str], sep: str = ","):
     """Converts a list of strings into a CSV string."""
     return sep.join(lst)
 
@@ -119,7 +119,7 @@ def merge_values(key: str, src_val, tgt_val, strat: str, csv_sep: str):
             for x in tgt_list + src_list:
                 if x not in merged:
                     merged.append(x)
-        merged_s = list_to_csv_string(merged, sep=csv_sep + " " if not csv_sep.endswith(" ") else csv_sep)
+        merged_s = list_to_csv_string(merged, sep=csv_sep)
         changed = merged_s != (tgt_val or "")
         return merged_s, changed
 
@@ -330,7 +330,7 @@ def main():
 
     token = os.environ.get(args.gitlab_token_env)
     if not token:
-        print(colored(f"ERROR: GitLab token not found in env {args.gitlab_token_env}", "red"))
+        print(colored(f"ERROR: GitLab token not found in env {args.gitlab_token_env}", "red") )
         sys.exit(1)
 
     tmpdir_base = tempfile.mkdtemp(prefix="config-sync-")
@@ -339,7 +339,7 @@ def main():
 
     try:
         for tgt_branch in args.target_branches:
-            print(colored(f"\n=== Processing target branch: {tgt_branch} ===", "cyan"))
+            print(colored(f"\n=== Processing target branch: {tgt_branch} ===", "cyan") )
             tmpdir = Path(tmpdir_base) / tgt_branch.replace("/", "_")
             tmpdir.mkdir(parents=True, exist_ok=True)
 
@@ -347,7 +347,7 @@ def main():
             try:
                 clone_repo(args.repo_url, token, branch=tgt_branch, tmpdir=str(tmpdir), depth=args.fetch_depth if args.fetch_depth > 0 else None)
             except subprocess.CalledProcessError as e:
-                print(colored(f"ERROR cloning repo for branch {tgt_branch}: {e.stderr}", "red"))
+                print(colored(f"ERROR cloning repo for branch {tgt_branch}: {e.stderr}", "red") )
                 overall_success = False
                 continue
 
@@ -356,7 +356,7 @@ def main():
                 try:
                     subprocess.run(["git", "fetch", "origin", args.source_branch], cwd=str(tmpdir), check=True, capture_output=True)
                 except subprocess.CalledProcessError as e:
-                    print(colored(f"Warning: failed to fetch source branch {args.source_branch}: {e.stderr}", "yellow"))
+                    print(colored(f"Warning: failed to fetch source branch {args.source_branch}: {e.stderr}", "yellow") )
 
             config_path_in_repo = tmpdir / args.config_file
             policy = load_json(config_path_in_repo) if config_path_in_repo.exists() else load_json(Path(args.config_file))
@@ -412,8 +412,8 @@ def main():
 
                     all_changes_for_branch.extend([f"[{service}/{to_env}] {c}" for c in changes])
 
-                    orig_text = json.dumps(tgt_json, indent=2, sort_keys=True) + "\n"
-                    merged_text = json.dumps(merged_json, indent=2, sort_keys=True) + "\n"
+                    orig_text = json.dumps(tgt_json, indent=2, sort_keys=False) + "\n"
+                    merged_text = json.dumps(merged_json, indent=2, sort_keys=False) + "\n"
                     
                     if orig_text == merged_text:
                         continue

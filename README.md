@@ -143,6 +143,35 @@ python sync.py --service accounts-service --apply-to-multiple-target-branches
 
 ---
 
+## Command-line Options
+
+The script offers a range of command-line options to control its behavior.
+
+| Option | Description | Default |
+| :--- | :--- | :--- |
+| `--repo-url` | **(Required)** The URL of the GitLab repository to operate on. | `None` |
+| `--project-id` | **(Required)** The ID of the GitLab project. | `None` |
+| `--gitlab-url` | The base URL of the GitLab instance. | `https://gitlab.com` |
+| `--config-file` | The path to the synchronization configuration file (e.g., `sync-config.json`). This can be a path within the repository or a local file path. | `sync-config.json` |
+| `--source-branch` | The branch from which to source the configuration changes. | `develop` |
+| `--source-commit` | The specific commit hash to sync from. If provided, this overrides the `--source-branch` option. | `None` |
+| `--source-config-filename` | The name of the configuration file in the source directory (e.g., `config.json`). | `config.json` |
+| `--target-config-filename` | The name of the configuration file in the target directory (e.g., `config.json`). | `config.json` |
+| `--target-branches` | **(Required)** A list of one or more target branches to which the configuration changes should be applied (e.g., release branches). | `None` |
+| `--from-env` | The source environment from which to read the configuration (e.g., `dev`). | `dev` |
+| `--to-env` | **(Required)** A list of one or more target environments to which the configuration should be applied. | `None` |
+| `--services` | **(Required)** A list of service folder names to be processed. | `None` |
+| `--gitlab-token-env` | The name of the environment variable that holds the GitLab private access token. | `GITLAB_TOKEN` |
+| `--csv-sep` | The separator character used for values that should be treated as CSV lists for merging. | `,` |
+| `--dry-run` | If set, the script will perform a dry run, showing the changes that would be made without actually committing or pushing them. No branches or MRs will be created. | `False` |
+| `--branch-prefix` | The prefix to use when creating new branches for the configuration changes. | `bugfix/coreb-000-auto-app-config` |
+| `--commit-message` | The commit message to use when committing the configuration changes. | `chore(config): auto-sync app configuration` |
+| `--mr-labels` | A comma-separated list of labels to apply to the created Merge Requests. | `""` |
+| `--schemas-dir` | The directory where the service-specific JSON schemas are located. This can be a path within the repository or a local directory. | `schemas` |
+| `--fetch-depth` | The depth to use when fetching the Git repository history. A value of `0` fetches the full history, which is recommended for a reliable 3-way merge. | `0` |
+
+---
+
 ## 📖 Script Walkthrough
 
 ### Main Functions
