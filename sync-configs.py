@@ -10,11 +10,12 @@ python config_sync.py \
   --source-branch develop \
   --source-commit <commit_hash> \
   --target-branches release/1.4 release/1.5 \
-  --from-env dev \
-  --to-env sit uat \
+  --from-env DEV \
+  --to-env SIT UAT \
   --services microservice-1 microservice-26 \
   --config-file sync-config.json \
-  --schemas-dir schemas/
+  --schemas-dir schemas/ \
+  --no-mr-description
 """
 
 from pathlib import Path
@@ -218,10 +219,7 @@ def merge_json_configs_three_way(
 
         src_changed = anc_val != src_val
         tgt_changed = (anc_val != tgt_val) if (k in flat_tgt or anc_val is not None) else False
-        if src_changed and tgt_changed and (tgt_val != src_val):
-            conflicts.append(f"Conflict on key {k}: ancestor={repr(anc_val)} source={repr(src_val)} target={repr(tgt_val)}")
-            continue
-
+        
         strat = get_strategy_for_key(k)
         if not strat:
             is_csv = (isinstance(src_val, str) and "," in src_val) or \
@@ -230,6 +228,10 @@ def merge_json_configs_three_way(
                 strat = default_list
             else:
                 strat = default_scalar
+
+        if src_changed and tgt_changed and (tgt_val != src_val) and strat not in ["union", "append"]:
+            conflicts.append(f"Conflict on key {k}: ancestor={repr(anc_val)} source={repr(src_val)} target={repr(tgt_val)}")
+            continue
 
         merged_val, changed = merge_values(k, src_val, tgt_val, strat, csv_sep)
         if changed:
@@ -257,6 +259,7 @@ def merge_json_configs_three_way(
 
     merged_json = unflatten(merged_flat)
     return merged_json, warnings + conflicts, changes
+
 
 # -----------------------------
 # Helper: unified diff string
@@ -451,26 +454,28 @@ def main():
                 continue
 
             mr_title = f"Bugfix: Automated Application Configuration Sync to {tgt_branch}"
-            mr_body_lines = [f"Automated config sync from `{source_ref}` to `{tgt_branch}`.\n"]
-            if all_changes_for_branch:
-                mr_body_lines.append("### Changes\n")
-                mr_body_lines.extend([f"- {ch}" for ch in all_changes_for_branch])
-            if all_warnings_conflicts:
-                mr_body_lines.append("\n### Warnings\n")
-                mr_body_lines.extend([f"- {w}" for w in all_warnings_conflicts])
-            
-            mr_body_lines.append("\n### Diff (truncated)\n")
-            full_diff_text = "\n".join(all_diffs)
-            max_chars = 4000
-            if len(full_diff_text) > max_chars:
-                mr_body_lines.append(f"Diff is large; included first {max_chars} chars below. Full diff is in commit.\n```diff\n")
-                mr_body_lines.append(full_diff_text[:max_chars])
-                mr_body_lines.append("\n```\n")
-            else:
-                mr_body_lines.append("```diff\n")
-                mr_body_lines.append(full_diff_text)
-                mr_body_lines.append("\n```\n")
-            mr_body = "\n".join(mr_body_lines)
+            mr_body = ""
+            if not args.no_mr_description:
+                mr_body_lines = [f"Automated config sync from `{source_ref}` to `{tgt_branch}`.\n"]
+                if all_changes_for_branch:
+                    mr_body_lines.append("### Changes\n")
+                    mr_body_lines.extend([f"- {ch}" for ch in all_changes_for_branch])
+                if all_warnings_conflicts:
+                    mr_body_lines.append("\n### Warnings\n")
+                    mr_body_lines.extend([f"- {w}" for w in all_warnings_conflicts])
+                
+                mr_body_lines.append("\n### Diff (truncated)\n")
+                full_diff_text = "\n".join(all_diffs)
+                max_chars = 4000
+                if len(full_diff_text) > max_chars:
+                    mr_body_lines.append(f"Diff is large; included first {max_chars} chars below. Full diff is in commit.\n```diff\n")
+                    mr_body_lines.append(full_diff_text[:max_chars])
+                    mr_body_lines.append("\n```\n")
+                else:
+                    mr_body_lines.append("```diff\n")
+                    mr_body_lines.append(full_diff_text)
+                    mr_body_lines.append("\n```\n")
+                mr_body = "\n".join(mr_body_lines)
 
             try:
                 headers = {"PRIVATE-TOKEN": token}
