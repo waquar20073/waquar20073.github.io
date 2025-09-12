@@ -23,7 +23,7 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ml-auto">
                     <li class="nav-item"><a class="nav-link active" href="index.html">Home</a></li>
-                    <li class="nav-item"><a class="nav-link active" href="index.html">Blog</a></li>
+                    <li class="nav-item"><a class="nav-link active" href="https://34.148.175.45/wordpress/">Blog</a></li>
                     <li class="nav-item"><a class="nav-link active" href="#Projects">Projects</a></li>
                     <liclass="nav-item"><a class="nav-link active" onclick="window.location.href = &#39;https://drive.google.com/file/d/1pq7oecpvDQU-Qw5vYlm8yjBnMmp7XeGh/view?usp=sharing&#39;">Resume</a></li>
                     <li class="nav-item" class="nav-link" href="index.html">Visits: <em id="visits">Computing...</em></li>
@@ -44,7 +44,7 @@
                         <div class="container">
                             <div class="intro">
                                 <h2 class="text-center" id="AboutMe">About Me</h2>
-                                <p class="text-center" style="color: var(--white);">I am a Software Engineer (Fullstack Developer) at NatWest (Previously Royal Bank of Scotland) - Delhi NCR, India. I love developing secure and robust backend web APIs. If you want any API to be developed, deployed and maintained; please click on the 'Hire me' button above. I am available to play multiplayer games such as Valorant and Rocket League (open to other games as well) anytime, anyday.</p>
+                                <p class="text-center" style="color: var(--white);">I am a Software Engineer (Fullstack Developer) with 3 years of professional experience in developing scalable solutions. If you want any API or website to be developed, deployed and maintained; please click on the 'Hire me' button above. I am available to play multiplayer games such as Valorant and Rocket League (open to other games as well) anytime, anyday. Visit my blog for more details.</p>
                             </div>
                             <div class="buttons"></div>
                         </div>
@@ -201,13 +201,24 @@
         <section class="portfolio-block photography"></section>
         <section class="portfolio-block skills" style="padding: 0px;">
             <section class="contact-clean">
-                <form id="hireMeForm" method="post" action="https://formspree.io/f/meqvkgly">
+                <form id="hireMeForm" method="post" action="https://formspree.io/f/xldwvnyg">
                     <h2 class="text-center">Contact Me</h2>
                     <div class="form-group"><input class="form-control" type="text" name="name" placeholder="Name"></div>
                     <div class="form-group"><input class="form-control" type="email" name="_replyto" placeholder="Your Email" required="true"><small class="form-text" hidden="true">Please enter a correct email address.</small></div>
                     <div class="form-group"><textarea class="form-control" name="message" placeholder="Message" rows="14" required="true"></textarea></div>
                     <div class="form-group"><button class="btn btn-primary" type="submit">send </button></div>
                 </form>
+            </section>
+            <section id="connectWithMe" style="padding: 0 0 60px;">
+                <div class="container" style="max-width: 1080px;">
+                    <div style="background: #ffffff;border-radius: 12px;box-shadow: 0 10px 30px rgba(0,0,0,0.08);padding: 32px 20px;">
+                        <h2 class="text-center">Connect With Me</h2>
+                        <p class="text-center text-muted" style="margin-bottom: 24px;">Pick a time that works for you and let's talk.</p>
+                        <!-- Koalendar Inline Embed Start -->
+                        <div id="inline-widget-meet-with-waquar-shamsi"></div>
+                        <!-- Koalendar Inline Embed End -->
+                    </div>
+                </div>
             </section>
         </section>
     </main>
@@ -223,6 +234,9 @@
     <script src="assets/bootstrap/js/bootstrap.min.js"></script>
     <script src="assets/js/bs-init.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pikaday/1.6.1/pikaday.min.js"></script>
+    <script>window.Koalendar=window.Koalendar||function(){(Koalendar.props=Koalendar.props||[]).push(arguments)};</script>
+    <script async src="https://koalendar.com/assets/widget.js"></script>
+    <script>Koalendar('inline', {"url":"https://koalendar.com/e/meet-with-waquar-shamsi","selector":"#inline-widget-meet-with-waquar-shamsi"});</script>
     <script src="assets/js/theme.js"></script>
 </body>
     <script>

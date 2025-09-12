@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, shrink-to-fit=no">
+    <title>Hire Me - Waquar Shamsi</title>
+    <link rel="stylesheet" href="assets/bootstrap/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Lato:300,400,700">
+    <link rel="stylesheet" href="assets/fonts/font-awesome.min.css">
+    <link rel="stylesheet" href="assets/fonts/ionicons.min.css">
+    <link rel="stylesheet" href="assets/css/Contact-Form-Clean.css">
+    <link rel="stylesheet" href="assets/css/Features-Blue.css">
+    <link rel="stylesheet" href="assets/css/Highlight-Blue.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/3.5.2/animate.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/pikaday/1.6.1/css/pikaday.min.css">
+    <link rel="stylesheet" href="assets/css/Projects-Horizontal.css">
+    <style>
+      .success-msg, .error-msg {
+        display: none;
+        margin-top: 20px;
+        text-align: center;
+        font-weight: 500;
+      }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar navbar-dark navbar-expand-lg fixed-top bg-white portfolio-navbar gradient">
+        <div class="container"><a class="navbar-brand logo" href="index.html">Waquar Shamsi</a><button data-toggle="collapse" class="navbar-toggler" data-target="#navbarNav"><span class="sr-only">Toggle navigation</span><span class="navbar-toggler-icon"></span></button>
+            <div class="collapse navbar-collapse" id="navbarNav">
+                <ul class="navbar-nav ml-auto">
+                    <li class="nav-item"><a class="nav-link" href="index.html">Home</a></li>
+                    <li class="nav-item"><a class="nav-link" href="https://34.148.175.45/wordpress/">Blog</a></li>
+                    <li class="nav-item"><a class="nav-link" href="index.html#Projects">Projects</a></li>
+                    <li class="nav-item"><a class="nav-link" onclick="window.location.href = 'https://drive.google.com/file/d/1pq7oecpvDQU-Qw5vYlm8yjBnMmp7XeGh/view?usp=sharing'">Resume</a></li>
+                </ul>
+            </div>
+        </div>
+    </nav>
+    <main class="page contact-page">
+        <section class="portfolio-block contact">
+            <div class="container">
+                <div class="heading">
+                    <h2>Hire Me for Your Project 🚀</h2>
+                </div>
+                <form id="hireMeForm">
+                    <div class="form-group">
+                        <label for="name">Your Name</label>
+                        <input class="form-control" type="text" id="name" name="name" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="email">Your Email</label>
+                        <input class="form-control" type="email" id="email" name="_replyto" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="details">Project Details</label>
+                        <textarea class="form-control" id="details" name="details" rows="5" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="budget">Estimated Budget (optional)</label>
+                        <input class="form-control" type="text" id="budget" name="budget">
+                    </div>
+                    <div class="form-group">
+                        <label for="timeline">Timeline / Deadline (optional)</label>
+                        <input class="form-control" type="text" id="timeline" name="timeline">
+                    </div>
+                    <div class="form-group">
+                        <button class="btn btn-primary btn-block" type="submit">Send Request</button>
+                    </div>
+                    <div class="alert alert-success success-msg">✅ Thank you! Your request has been sent.</div>
+                    <div class="alert alert-danger error-msg">❌ Oops! Something went wrong. Please try again.</div>
+                </form>
+            </div>
+        </section>
+    </main>
+    <footer class="page-footer">
+        <div class="container">
+            <div class="links"><a href="index.html#AboutMe">About me</a><a href="index.html#Projects">Projects</a><a href="hire-me.html">Contact me</a></div>
+            <br />
+            <div class="links">Domain Name courtesy of - <a href="http://freedns.afraid.org/">Free DNS</a></div>
+            <div class="social-icons"><i class="fa fa-github-square" style="margin: 13px;" onclick="window.location.href = 'https://github.com/waquar20073'"></i></div>
+        </div>
+    </footer>
+    <script src="assets/js/jquery.min.js"></script>
+    <script src="assets/bootstrap/js/bootstrap.min.js"></script>
+    <script src="assets/js/bs-init.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pikaday/1.6.1/pikaday.min.js"></script>
+    <script src="assets/js/theme.js"></script>
+    <script>
+      const form = document.getElementById('hireMeForm');
+      const successMsg = document.querySelector('.success-msg');
+      const errorMsg = document.querySelector('.error-msg');
+
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+
+        const name = document.getElementById('name').value.trim();
+        const email = document.getElementById('email').value.trim();
+        const details = document.getElementById('details').value.trim();
+        const budget = document.getElementById('budget').value.trim();
+        const timeline = document.getElementById('timeline').value.trim();
+
+        // Summarize into one message
+        const message = `
+  New Freelance Project Request:
+
+  Name: ${name}
+  Email: ${email}
+  Details: ${details}
+  Budget: ${budget || 'Not specified'}
+  Timeline: ${timeline || 'Not specified'}
+        `;
+
+        const formData = new FormData();
+        formData.append("name", name);
+        formData.append("_replyto", email);
+        formData.append("message", message);
+
+        try {
+          const resp = await fetch("https://formspree.io/f/xldwvnyg", {
+            method: "POST",
+            body: formData,
+            headers: { 'Accept': 'application/json' }
+          });
+
+          if (resp.ok) {
+            successMsg.style.display = "block";
+            errorMsg.style.display = "none";
+            form.reset();
+          } else {
+            throw new Error("Formspree error");
+          }
+        } catch (err) {
+          successMsg.style.display = "none";
+          errorMsg.style.display = "block";
+          console.error(err);
+        }
+      });
+    </script>
+</body>
+
+</html>
