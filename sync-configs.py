@@ -2,9 +2,10 @@
 """
 sync-configs.py - Advanced configuration synchronization tool for .ini files.
 
-This script supports 3-way merging between branches in the same or different
-repositories, 2-way merging for different files in the same branch, 
-multi-environment sync, and automatic GitLab Merge Request creation.
+Supports multiple modes of operation:
+- Interactive, menu-driven mode for guided syncing.
+- Non-interactive (flag-based) mode for automation.
+- A cache update mode to refresh local project lists from GitLab.
 """
 
 import argparse
@@ -16,31 +17,22 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 import fnmatch
 import requests
-from typing import List, Dict, Tuple, Set
+from typing import List, Dict, Tuple, Set, Any, Optional
 
-# -----------------------------
-# Utilities
-# -----------------------------
+# ------------------------------------------------------------------------------
+# SECTION 1: Core Utilities & Helpers
+# ------------------------------------------------------------------------------
 
 def colored(text: str, color: str) -> str:
-    colors = {
-        "red": "\033[91m", "green": "\033[92m", "yellow": "\033[93m",
-        "blue": "\033[94m", "cyan": "\033[96m", "reset": "\033[0m",
-    }
+    colors = {"red": "\033[91m", "green": "\033[92m", "yellow": "\033[93m", "blue": "\033[94m", "cyan": "\033[96m", "reset": "\033[0m"}
     return f"{colors.get(color, '')}{text}{colors['reset']}"
 
 def unified_diff_str(a: str, b: str, fromfile: str, tofile: str) -> str:
-    a_lines = a.splitlines(keepends=True)
-    b_lines = b.splitlines(keepends=True)
-    diff = difflib.unified_diff(a_lines, b_lines, fromfile=fromfile, tofile=tofile)
-    return "".join(diff)
-
-# -----------------------------
-# INI File Handling
-# -----------------------------
+    return "".join(difflib.unified_diff(a.splitlines(keepends=True), b.splitlines(keepends=True), fromfile=fromfile, tofile=tofile))
 
 def parse_ini_from_string(content: str) -> configparser.ConfigParser:
     config = configparser.ConfigParser(interpolation=None)
@@ -49,31 +41,80 @@ def parse_ini_from_string(content: str) -> configparser.ConfigParser:
     return config
 
 def config_to_string(config: configparser.ConfigParser) -> str:
-    with tempfile.NamedTemporaryFile(mode='w', delete=True, encoding='utf-8') as temp:
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as temp:
         config.write(temp)
-        temp.flush()
-        return Path(temp.name).read_text(encoding='utf-8')
+    with open(temp.name, 'r', encoding='utf-8') as f:
+        content = f.read()
+    os.remove(temp.name)
+    return content
 
-# -----------------------------
-# GitLab API & Git Operations
-# -----------------------------
+def select_from_list(prompt: str, options: List[Any]) -> Any:
+    print(prompt)
+    for i, option in enumerate(options, 1):
+        print(f"  {i}) {option}")
+    while True:
+        try:
+            choice = int(input("Enter number: "))
+            if 1 <= choice <= len(options):
+                return options[choice - 1]
+            else:
+                print(colored("Invalid number, please try again.", "yellow"))
+        except ValueError:
+            print(colored("Please enter a valid number.", "yellow"))
+
+def force_rmtree(path: str, max_retries: int = 3, delay: float = 0.7):
+    """A wrapper for shutil.rmtree that retries on PermissionError, common on Windows."""
+    for i in range(max_retries):
+        try:
+            if Path(path).exists():
+                shutil.rmtree(path)
+            return
+        except PermissionError:
+            time.sleep(delay)
+        except FileNotFoundError:
+            return # Already gone
+    print(colored(f"Failed to delete temporary directory {path} after {max_retries} retries.", "red"))
+
+# ------------------------------------------------------------------------------
+# SECTION 2: GitLab API & Git Operations
+# ------------------------------------------------------------------------------
+
+def get_gitlab_api_paged(url: str, token: str, params: Optional[Dict] = None) -> List[Dict]:
+    headers = {"PRIVATE-TOKEN": token}
+    results: List[Dict] = []
+    try:
+        while url:
+            response = requests.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            results.extend(response.json())
+            url = response.links.get('next', {}).get('url')
+    except requests.exceptions.RequestException as e:
+        print(colored(f"GitLab API Error: {e}", "red"))
+        sys.exit(1)
+    return results
 
 def get_project_info(gitlab_url: str, project_id: str, token: str) -> Dict:
-    api_url = f"{gitlab_url}/api/v4/projects/{project_id}"
+    return get_gitlab_api_paged(f"{gitlab_url}/api/v4/projects/{project_id}", token)[0]
+
+def get_group_projects(gitlab_url: str, group_id: str, token: str) -> List[Dict]:
+    return get_gitlab_api_paged(f"{gitlab_url}/api/v4/groups/{group_id}/projects", token, {"include_subgroups": "true"})
+
+def get_repo_branches(gitlab_url: str, project_id: str, token: str) -> List[str]:
+    return [b['name'] for b in get_gitlab_api_paged(f"{gitlab_url}/api/v4/projects/{project_id}/repository/branches", token)]
+
+def get_repo_ini_files(repo_url: str, branch: str, token: str) -> List[str]:
+    tmpdir = tempfile.mkdtemp(prefix="ini-list-")
     try:
-        response = requests.get(api_url, headers={"PRIVATE-TOKEN": token})
-        response.raise_for_status()
-        return response.json()
-    except requests.exceptions.RequestException as e:
-        print(colored(f"ERROR fetching repository info for project {project_id}: {e}", "red"))
-        sys.exit(1)
+        print(f"Cloning repo to list .ini files...", end='\r')
+        clone_repo(repo_url, token, branch, tmpdir)
+        print(" "*50, end='\r') # Clear line
+        return sorted([str(p.relative_to(tmpdir)) for p in Path(tmpdir).rglob('*.ini')])
+    finally:
+        force_rmtree(tmpdir)
 
 def clone_repo(repo_url: str, token: str, branch: str, tmpdir: str):
-    auth_url = repo_url
-    if token and repo_url.startswith("https://"):
-        parts = repo_url.split("https://", 1)
-        auth_url = f"https://oauth2:{token}@{parts[1]}"
-    subprocess.run(["git", "clone", "--branch", branch, auth_url, tmpdir], check=True, capture_output=True, text=True)
+    auth_url = f"https://oauth2:{token}@{repo_url.split('https://')[1]}" if token and repo_url.startswith('https://') else repo_url
+    subprocess.run(["git", "clone", "--branch", branch, "--depth", "1", auth_url, tmpdir], check=True, capture_output=True, text=True)
 
 def get_file_content_from_ref(repo_path: str, ref: str, file_path: str) -> str:
     if not ref: return ""
@@ -81,7 +122,7 @@ def get_file_content_from_ref(repo_path: str, ref: str, file_path: str) -> str:
         return subprocess.run(["git", "show", f"{ref}:{file_path}"], cwd=repo_path, capture_output=True, text=True, check=True).stdout
     except subprocess.CalledProcessError: return ""
 
-def compute_three_way_ancestor(repo_path: str, source_ref: str, target_ref: str) -> str:
+def compute_three_way_ancestor(repo_path: str, source_ref: str, target_ref: str) -> Optional[str]:
     try:
         return subprocess.run(["git", "merge-base", source_ref, target_ref], cwd=repo_path, capture_output=True, text=True, check=True).stdout.strip()
     except subprocess.CalledProcessError: return None
@@ -92,70 +133,57 @@ def create_and_push_branch(repo_path: str, new_branch: str, commit_message: str)
     subprocess.run(["git", "commit", "-m", commit_message], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(["git", "push", "-u", "origin", new_branch], cwd=repo_path, check=True, capture_output=True)
 
-# -----------------------------
-# Merge Logic
-# -----------------------------
+def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch: str, target_branch: str, title: str, description: str):
+    api_url = f"{gitlab_url}/api/v4/projects/{project_id}/merge_requests"
+    payload = {"source_branch": source_branch, "target_branch": target_branch, "title": title, "description": description, "remove_source_branch": True}
+    try:
+        response = requests.post(api_url, headers={"PRIVATE-TOKEN": token}, json=payload)
+        response.raise_for_status()
+        print(colored(f"Successfully created MR: {response.json()['web_url']}", "green"))
+    except requests.exceptions.RequestException as e:
+        print(colored(f"ERROR creating MR: {e.response.text if e.response else e}", "red"))
 
-def merge_ini_two_way(
-    source_config: configparser.ConfigParser, target_config: configparser.ConfigParser,
-    ignore_keys: List[str], csv_strategy: str
-) -> Tuple[configparser.ConfigParser, List[str]]:
+# ------------------------------------------------------------------------------
+# SECTION 3: Merge Logic
+# ------------------------------------------------------------------------------
+
+def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     changes = []
-    merged_config = configparser.ConfigParser(interpolation=None)
-    merged_config.optionxform = str
+    merged_config = configparser.ConfigParser(interpolation=None); merged_config.optionxform = str
     merged_config.read_dict(target_config)
-
     if 'Default' not in source_config: return merged_config, changes
     if 'Default' not in merged_config: merged_config.add_section('Default')
-
     src = source_config['Default']
     for key, src_val in src.items():
-        if any(fnmatch.fnmatchcase(key, pattern) for pattern in ignore_keys): continue
-
+        if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys): continue
         tgt_val = merged_config['Default'].get(key)
         if src_val == tgt_val: continue
-
         is_csv = (src_val and ',' in src_val) or (tgt_val and ',' in tgt_val)
+        final_val = src_val
         if is_csv and csv_strategy == 'union':
             src_list = {s.strip() for s in (src_val or '').split(',') if s.strip()}
             tgt_list = {s.strip() for s in (tgt_val or '').split(',') if s.strip()}
             final_val = ",".join(sorted(list(tgt_list | src_list)))
-        else:
-            final_val = src_val
-        
         if final_val != tgt_val:
             merged_config.set('Default', key, final_val)
             changes.append(f"Updated key '{key}': '{tgt_val}' -> '{final_val}'")
-
     return merged_config, changes
 
-def merge_ini_three_way(
-    ancestor_config: configparser.ConfigParser, source_config: configparser.ConfigParser,
-    target_config: configparser.ConfigParser, ignore_keys: List[str], csv_strategy: str
-) -> Tuple[configparser.ConfigParser, List[str], List[str]]:
+def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_keys, csv_strategy):
     changes, conflicts = [], []
-    merged_config = configparser.ConfigParser(interpolation=None)
-    merged_config.optionxform = str
+    merged_config = configparser.ConfigParser(interpolation=None); merged_config.optionxform = str
     merged_config.read_dict(target_config)
-
     anc = ancestor_config['Default'] if 'Default' in ancestor_config else {}
     src = source_config['Default'] if 'Default' in source_config else {}
     tgt = target_config['Default'] if 'Default' in target_config else {}
-    
     if 'Default' not in merged_config: merged_config.add_section('Default')
-
     all_keys: Set[str] = set(anc.keys()) | set(src.keys()) | set(tgt.keys())
-
     for key in sorted(list(all_keys)):
-        if any(fnmatch.fnmatchcase(key, pattern) for pattern in ignore_keys): continue
-
+        if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys): continue
         anc_val, src_val, tgt_val = anc.get(key), src.get(key), tgt.get(key)
         src_changed, tgt_changed = src_val != anc_val, tgt_val != anc_val
-
         if src_changed and tgt_changed and src_val != tgt_val:
-            conflicts.append(f"Conflict on key '{key}': source='{src_val}', target='{tgt_val}'")
-            continue
-
+            conflicts.append(f"Conflict on key '{key}': source='{src_val}', target='{tgt_val}'"); continue
         final_val, changed = tgt_val, False
         if src_changed and src_val != tgt_val:
             is_csv = (src_val and ',' in src_val) or (tgt_val and ',' in tgt_val)
@@ -163,167 +191,193 @@ def merge_ini_three_way(
                 src_list = {s.strip() for s in (src_val or '').split(',') if s.strip()}
                 tgt_list = {s.strip() for s in (tgt_val or '').split(',') if s.strip()}
                 anc_list = {s.strip() for s in (anc_val or '').split(',') if s.strip()}
-                merged_set = tgt_list | (src_list - anc_list)
-                final_val = ",".join(sorted(list(merged_set)))
+                final_val = ",".join(sorted(list(tgt_list | (src_list - anc_list))))
                 changed = final_val != tgt_val
             else:
                 final_val, changed = src_val, True
-        
         if src_val is None and anc_val is not None and not tgt_changed:
-            if key in merged_config['Default']:
-                del merged_config['Default'][key]
-                changes.append(f"Removed key '{key}' as it was removed in source.")
+            if key in merged_config['Default']: del merged_config['Default'][key]; changes.append(f"Removed key '{key}'")
             continue
-
         if changed:
-            changes.append(f"Updated key '{key}': '{tgt_val}' -> '{final_val}'")
-            merged_config.set('Default', key, str(final_val))
+            merged_config.set('Default', key, str(final_val)); changes.append(f"Updated key '{key}': '{tgt_val}' -> '{final_val}'")
         elif final_val is not None and key not in merged_config['Default']:
-             merged_config.set('Default', key, str(final_val))
-             changes.append(f"Added key '{key}': '{final_val}'")
-
+             merged_config.set('Default', key, str(final_val)); changes.append(f"Added key '{key}': '{final_val}'")
     return merged_config, changes, conflicts
 
-# -----------------------------
-# GitLab MR Creation
-# -----------------------------
+# ------------------------------------------------------------------------------
+# SECTION 4: Application Modes
+# ------------------------------------------------------------------------------
 
-def create_gitlab_mr(
-    gitlab_url: str, project_id: str, token: str, source_branch: str,
-    target_branch: str, title: str, description: str
-):
-    headers = {"PRIVATE-TOKEN": token}
-    payload = {
-        "source_branch": source_branch, "target_branch": target_branch,
-        "title": title, "description": description, "remove_source_branch": True,
-    }
-    mr_url = f"{gitlab_url}/api/v4/projects/{project_id}/merge_requests"
-    try:
-        response = requests.post(mr_url, headers=headers, json=payload)
-        response.raise_for_status()
-        mr_data = response.json()
-        print(colored(f"Successfully created MR: {mr_data['web_url']}", "green"))
-    except requests.exceptions.RequestException as e:
-        print(colored(f"ERROR creating MR: {e.response.text if e.response else e}", "red"))
-        print(colored("Please create the MR manually.", "yellow"))
+def update_projects_cache(config_file: str, gitlab_url: str, token: str):
+    print("Updating project cache from GitLab...")
+    config = configparser.ConfigParser(interpolation=None); config.optionxform = str
+    config.read(config_file)
+    if not config.has_section('gitlab'):
+        print(colored("ERROR: [gitlab] section not in config!", "red"))
+        sys.exit(1)
+    for env in ['prod', 'non_prod']:
+        group_id = config.get('gitlab', f'{env}_group_id', fallback=None)
+        if not group_id: continue
+        section = f'projects_{env}'
+        print(f"Fetching projects for '{env}' group ({group_id})...")
+        projects = get_group_projects(gitlab_url, group_id, token)
+        if config.has_section(section): config.remove_section(section)
+        config.add_section(section)
+        for proj in sorted(projects, key=lambda p: p['name_with_namespace']):
+            config.set(section, proj['name_with_namespace'], str(proj['id']))
+    with open(config_file, 'w') as f:
+        config.write(f)
+    print(colored("Project cache updated successfully!", "green"))
 
-# -----------------------------
-# Main Execution
-# -----------------------------
-
-def main():
-    parser = argparse.ArgumentParser(description="Advanced INI Configuration Sync Tool")
-    parser.add_argument("--target-project-id", required=True, help="GitLab Project ID to sync TO.")
-    parser.add_argument("--source-project-id", help="GitLab Project ID to sync FROM. If omitted, uses target-project-id.")
-    parser.add_argument("--target-branch", required=True, help="Target branch for sync.")
-    parser.add_argument("--source-branch", default="main", help="Source branch name.")
-    parser.add_argument("--source-commit", help="Source commit hash (overrides source-branch).")
-    parser.add_argument("--source-env", required=True, help="Source environment file name (e.g., DEV-ABC.ini).")
-    parser.add_argument("--target-envs", nargs='+', required=True, help="List of target environment files (e.g., SIT-ABC.ini UAT-ABC.ini).")
-    parser.add_argument("--config-file", default="sync-config.ini", help="Path to the script's configuration file.")
-    parser.add_argument("--gitlab-token-env", default="GITLAB_TOKEN", help="Environment variable for GitLab token.")
-    parser.add_argument("--dry-run", action="store_true", help="Show changes without writing files or creating MRs.")
-    parser.add_argument("--branch-prefix", default="feature/auto-config-sync")
-    parser.add_argument("--commit-message", default="chore(config): Automated configuration sync")
-    args = parser.parse_args()
-
-    if not args.source_project_id: args.source_project_id = args.target_project_id
-
-    script_config = configparser.ConfigParser()
-    script_config.read(args.config_file)
-    gitlab_url = script_config.get('gitlab', 'url', fallback='https://gitlab.com')
-    ignore_keys = script_config.get('ignore', 'keys', fallback='').split()
-    csv_strategy = script_config.get('defaults', 'csv_strategy', fallback='union')
-
-    token = os.environ.get(args.gitlab_token_env)
-    if not token: print(colored(f"ERROR: GitLab token not found in env var '{args.gitlab_token_env}'", "red")); sys.exit(1)
-
-    target_project_info = get_project_info(gitlab_url, args.target_project_id, token)
-    target_repo_url = target_project_info["http_url_to_repo"]
+def run_sync_operation(args: argparse.Namespace, token: str):
+    config = configparser.ConfigParser(); config.read(args.config_file)
+    gitlab_url = config.get('gitlab', 'url', fallback='https://gitlab.com')
+    ignore_keys = config.get('ignore', 'keys', fallback='').split()
+    csv_strategy = config.get('defaults', 'csv_strategy', fallback='union')
+    target_info = get_project_info(gitlab_url, args.target_project_id, token)
     tmpdir = tempfile.mkdtemp(prefix="config-sync-")
-
     try:
-        print(f"Cloning target repo {target_project_info['path_with_namespace']} into {tmpdir}...")
-        clone_repo(target_repo_url, token, args.target_branch, tmpdir)
-
-        target_ref = f"origin/{args.target_branch}"
-        is_same_repo_sync = args.source_project_id == args.target_project_id
-
-        if not is_same_repo_sync:
-            source_project_info = get_project_info(gitlab_url, args.source_project_id, token)
-            source_repo_url = source_project_info["http_url_to_repo"]
-            print(f"Adding source remote for {source_project_info['path_with_namespace']}...")
-            subprocess.run(["git", "remote", "add", "source", source_repo_url], cwd=tmpdir, check=True)
+        print(f"Cloning target repo {target_info['path_with_namespace']}...")
+        clone_repo(target_info["http_url_to_repo"], token, args.target_branch, tmpdir)
+        target_ref, is_same_repo = f"origin/{args.target_branch}", args.source_project_id == args.target_project_id
+        if not is_same_repo:
+            source_info = get_project_info(gitlab_url, args.source_project_id, token)
+            print(f"Adding source remote for {source_info['path_with_namespace']}...")
+            subprocess.run(["git", "remote", "add", "source", source_info["http_url_to_repo"]], cwd=tmpdir, check=True)
             subprocess.run(["git", "fetch", "source", args.source_branch], cwd=tmpdir, check=True, capture_output=True)
             source_ref = args.source_commit or f"source/{args.source_branch}"
         else:
-            if not args.source_commit:
-                subprocess.run(["git", "fetch", "origin", args.source_branch], cwd=tmpdir, check=True, capture_output=True)
+            if not args.source_commit: subprocess.run(["git", "fetch", "origin", args.source_branch], cwd=tmpdir, check=True, capture_output=True)
             source_ref = args.source_commit or f"origin/{args.source_branch}"
-
-        is_same_branch_sync = is_same_repo_sync and args.source_branch == args.target_branch
-        ancestor_commit = None if is_same_branch_sync else compute_three_way_ancestor(tmpdir, source_ref, target_ref)
-        
-        if not is_same_branch_sync and not ancestor_commit:
-            print(colored(f"Warning: Could not find common ancestor. Proceeding with 2-way merge logic for safety.", "yellow"))
-
+        is_same_branch = is_same_repo and args.source_branch == args.target_branch
+        ancestor = None if is_same_branch else compute_three_way_ancestor(tmpdir, source_ref, target_ref)
+        if not is_same_branch and not ancestor:
+            print(colored("Warning: No common ancestor. Using 2-way merge.", "yellow"))
         all_changes, all_conflicts, all_diffs, files_to_commit = [], [], [], []
-        for target_env_file in args.target_envs:
-            print(colored(f"\n--- Processing {args.source_env} -> {target_env_file} ---", "blue"))
-            
+        for target_env in args.target_envs:
+            print(colored(f"\n--- Processing {args.source_env} -> {target_env} ---", "blue"))
             src_content = get_file_content_from_ref(tmpdir, source_ref, args.source_env)
-            tgt_content = get_file_content_from_ref(tmpdir, target_ref, target_env_file)
-
-            if not src_content: print(colored(f"Warning: Source file '{args.source_env}' not found. Skipping.", "yellow")); continue
-
-            if is_same_branch_sync or not ancestor_commit:
-                # 2-Way Merge: Different files in same branch, or no common ancestor found
-                merged_config, changes = merge_ini_two_way(
-                    parse_ini_from_string(src_content), parse_ini_from_string(tgt_content), ignore_keys, csv_strategy
-                )
+            tgt_content = get_file_content_from_ref(tmpdir, target_ref, target_env)
+            if not src_content:
+                print(colored(f"Warning: Source file not found. Skipping.", "yellow"))
+                continue
+            if is_same_branch or not ancestor:
+                merged_cfg, changes = merge_ini_two_way(parse_ini_from_string(src_content), parse_ini_from_string(tgt_content), ignore_keys, csv_strategy)
                 conflicts = []
             else:
-                # 3-Way Merge: Syncing same file across different branches
-                anc_content = get_file_content_from_ref(tmpdir, ancestor_commit, target_env_file)
-                merged_config, changes, conflicts = merge_ini_three_way(
-                    parse_ini_from_string(anc_content), parse_ini_from_string(src_content),
-                    parse_ini_from_string(tgt_content), ignore_keys, csv_strategy
-                )
-
-            if conflicts: all_conflicts.extend([f"[{target_env_file}] {c}" for c in conflicts])
-            if changes: all_changes.extend([f"[{target_env_file}] {c}" for c in changes])
-            
-            merged_content = config_to_string(merged_config)
+                anc_content = get_file_content_from_ref(tmpdir, ancestor, target_env)
+                merged_cfg, changes, conflicts = merge_ini_three_way(parse_ini_from_string(anc_content), parse_ini_from_string(src_content), parse_ini_from_string(tgt_content), ignore_keys, csv_strategy)
+            if conflicts: all_conflicts.extend([f"[{target_env}] {c}" for c in conflicts])
+            if changes: all_changes.extend([f"[{target_env}] {c}" for c in changes])
+            merged_content = config_to_string(merged_cfg)
             if tgt_content != merged_content:
-                all_diffs.append(unified_diff_str(tgt_content, merged_content, fromfile=target_env_file, tofile=target_env_file))
-                if not args.dry_run: (Path(tmpdir) / target_env_file).write_text(merged_content)
-                files_to_commit.append(target_env_file)
-
-        if all_conflicts: 
+                all_diffs.append(unified_diff_str(tgt_content, merged_content, fromfile=target_env, tofile=target_env))
+                if not args.dry_run: (Path(tmpdir) / target_env).write_text(merged_content)
+                files_to_commit.append(target_env)
+        if all_conflicts:
             print(colored("\nConflicts detected! Aborting.", "red"))
-            for c in all_conflicts: print(f"  - {c}")
+            for c in all_conflicts:
+                print(f"  - {c}")
             sys.exit(1)
-
-        if not files_to_commit: 
+        if not files_to_commit:
             print(colored("\nNo changes to sync.", "green"))
             sys.exit(0)
-
-        print(colored("\nDiff:", "yellow")); print("\n".join(all_diffs))
-
-        if args.dry_run: 
+        print(colored("\nDiff:", "yellow"))
+        print("\n".join(all_diffs))
+        if args.dry_run:
             print(colored("\nDRY-RUN: No files written, no MR created.", "yellow"))
             sys.exit(0)
-
         new_branch = f"{args.branch_prefix}-{random.randint(1000, 9999)}"
         create_and_push_branch(tmpdir, new_branch, args.commit_message)
         mr_title = f"chore(config): Automated configuration sync from {args.source_env}"
-        mr_desc = f"Automated configuration sync from `{args.source_project_id}:{args.source_branch}:{args.source_env}` to `{args.target_project_id}:{args.target_branch}`.\n\n**Changes:**\n- " + "\n- ".join(all_changes)
-        create_gitlab_mr(
-            gitlab_url, args.target_project_id, token, new_branch, args.target_branch, mr_title, mr_desc
-        )
-
+        mr_desc = f"Automated sync from `{args.source_project_id}:{args.source_branch}:{args.source_env}` to `{args.target_project_id}:{args.target_branch}`.\n\n**Changes:**\n- " + "\n- ".join(all_changes)
+        create_gitlab_mr(gitlab_url, args.target_project_id, token, new_branch, args.target_branch, mr_title, mr_desc)
     finally:
-        shutil.rmtree(tmpdir)
+        force_rmtree(tmpdir)
+
+def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
+    config = configparser.ConfigParser(interpolation=None); config.optionxform = str; config.read(config_file)
+    args = argparse.Namespace(config_file=config_file, dry_run=False, branch_prefix='feature/auto-config-sync', commit_message='chore(config): Automated sync')
+    env_choice = select_from_list("Select environment type:", ["non_prod", "prod"])
+    proj_section = f'projects_{env_choice}'
+    if not config.has_section(proj_section) or not config.items(proj_section):
+        print(colored(f"No projects found in '{proj_section}' section. Run with --update.", "red"))
+        sys.exit(1)
+    projects = {name: id for name, id in config.items(proj_section)}
+    
+    print(colored("\n--- Source Project ---", "cyan"))
+    src_proj_name = select_from_list("Select SOURCE project:", list(projects.keys()))
+    args.source_project_id = projects[src_proj_name]
+    src_branches = get_repo_branches(gitlab_url, args.source_project_id, token)
+    args.source_branch = select_from_list("Select SOURCE branch:", src_branches)
+    
+    print(colored("\n--- Target Project ---", "cyan"))
+    tgt_proj_name = select_from_list("Select TARGET project:", list(projects.keys()))
+    args.target_project_id = projects[tgt_proj_name]
+    tgt_branches = get_repo_branches(gitlab_url, args.target_project_id, token)
+    args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
+
+    proj_info = get_project_info(gitlab_url, args.source_project_id, token)
+    ini_files = get_repo_ini_files(proj_info['http_url_to_repo'], args.source_branch, token)
+    if not ini_files:
+        print(colored(f"No .ini files found in {src_proj_name} on branch {args.source_branch}", "red"))
+        sys.exit(1)
+
+    print(colored("\n--- File Selection ---", "cyan"))
+    args.source_env = select_from_list("Select SOURCE .ini file:", ini_files)
+    args.target_envs = [select_from_list("Select TARGET .ini file:", ini_files)]
+    args.source_commit = None # Not supported in interactive mode for simplicity
+
+    print(colored("\n--- Review Sync ---", "cyan"))
+    summary = (
+        f"  Source Project: {src_proj_name} (ID: {args.source_project_id})\n"
+        f"  Target Project: {tgt_proj_name} (ID: {args.target_project_id})\n"
+        f"  Source Path:    {args.source_branch} -> {args.source_env}\n"
+        f"  Target Path:    {args.target_branch} -> {args.target_envs[0]}"
+    )
+    print(summary)
+    confirm = input("\nProceed with this sync? (y/n): ").lower()
+    if confirm == 'y':
+        run_sync_operation(args, token)
+    else:
+        print("Sync cancelled.")
+
+# ------------------------------------------------------------------------------
+# SECTION 5: Main Dispatcher
+# ------------------------------------------------------------------------------
+
+def main():
+    parser = argparse.ArgumentParser(description="Advanced INI Configuration Sync Tool", formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("--update", action="store_true", help="Update the local cache of GitLab projects and exit.")
+    # Non-interactive flags
+    parser.add_argument("-tp", "--target-project-id", help="GitLab Project ID to sync TO.")
+    parser.add_argument("-sp", "--source-project-id", help="GitLab Project ID to sync FROM. If omitted, uses target-project-id.")
+    parser.add_argument("-tb", "--target-branch", help="Target branch for sync.")
+    parser.add_argument("-sb", "--source-branch", default="main", help="Source branch name.")
+    parser.add_argument("-sc", "--source-commit", help="Source commit hash (overrides source-branch).")
+    parser.add_argument("-se", "--source-env", help="Source environment file name (e.g., DEV-ABC.ini).")
+    parser.add_argument("-te", "--target-envs", nargs='+', help="List of target environment files (e.g., SIT-ABC.ini).")
+    # Common flags
+    parser.add_argument("-c", "--config-file", default="sync-config.ini", help="Path to the script's configuration file.")
+    parser.add_argument("-d", "--dry-run", action="store_true", help="Show changes without writing files or creating MRs.")
+    parser.add_argument("-p", "--branch-prefix", default="feature/auto-config-sync")
+    parser.add_argument("-m", "--commit-message", default="chore(config): Automated configuration sync")
+
+    args = parser.parse_args()
+    config = configparser.ConfigParser(); config.read(args.config_file)
+    gitlab_url = config.get('gitlab', 'url', fallback='https://gitlab.com')
+    token = config.get('gitlab', 'token', fallback=None)
+    if not token:
+        print(colored("ERROR: GitLab token not set in sync-config.ini", "red"))
+        sys.exit(1)
+
+    if args.update:
+        update_projects_cache(args.config_file, gitlab_url, token)
+    elif args.target_project_id and args.target_branch and args.source_env and args.target_envs:
+        if not args.source_project_id: args.source_project_id = args.target_project_id
+        run_sync_operation(args, token)
+    else:
+        run_interactive_mode(args.config_file, gitlab_url, token)
 
 if __name__ == "__main__":
     main()

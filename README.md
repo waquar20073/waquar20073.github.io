@@ -1,236 +1,125 @@
-# Config Sync Tool
+# INI Configuration Sync Tool
 
-A Python-based CLI tool to **safely synchronize configuration files across multiple services and environments** using GitLab Merge Requests (MRs).
-It includes schema validation, per-key merge strategies, MR auto-creation, and warning output for sensitive properties.
+This is an advanced command-line tool for synchronizing `.ini` configuration files between different branches or even different GitLab projects. It supports 3-way merging to prevent data loss, a user-friendly interactive mode, and a flag-based mode for automation.
 
----
+## Features
 
-## ✨ Features
+- **3-Way and 2-Way Merging**: Safely merges changes by using Git history to find a common ancestor. Automatically falls back to a 2-way merge for unrelated files.
+- **Interactive Mode**: A user-friendly menu-driven interface for guided syncing.
+- **Automated Mode**: Full support for command-line flags for use in scripts and CI/CD pipelines.
+- **Cross-Repository Sync**: Ability to sync configurations between two entirely different GitLab projects (e.g., non-prod to prod).
+- **Local Project Caching**: Fetches and caches your GitLab projects locally for faster use in interactive mode.
 
-* **Multi-service & multi-environment sync** in a single run.
-* **GitLab integration**:
+## Configuration
 
-  * Fetch and update files directly via GitLab REST API (`requests`).
-  * Create branches.
-  * Open Merge Requests automatically with a diff summary.
-* **Config management**:
+The script is configured using the `sync-config.ini` file.
 
-  * Ignore environment-specific properties (e.g., `dbUrl`).
-  * Show warnings in **red/yellow** for sensitive property changes.
-* **Per-key strategies**:
+```ini
+[gitlab]
+url = https://gitlab.com
+# Your personal GitLab access token with api scope.
+token = YOUR_GITLAB_TOKEN
+# The numeric IDs of the GitLab groups containing your projects.
+prod_group_id = 12345
+non_prod_group_id = 67890
 
-  * `replace`: overwrite the target value.
-  * `union`: merge list/dict values from both source and target.
-* **Validation**:
+[defaults]
+csv_strategy = union
 
-  * JSON Schema validation of configuration files (blocks commits on failure).
-* **Merge safety**:
+[ignore]
+keys = 
+    JAVA_OPTS
+    *.secret
 
-  * 3-way merge using Git history to detect divergent changes.
-* **Multi-branch updates**:
+# -- The sections below are managed by the script --
 
-  * `--apply-to-multiple-target-branches` mode for backporting or forward-porting changes.
+[projects_prod]
 
----
-
-## 📂 Project Structure
-
-```
-.
-├── sync-config.json       # Sync rules & service definitions
-├── config-schema.json     # JSON schema for validating configs
-├── sync.py                # Main Python CLI script
-└── README.md              # Documentation
+[projects_non_prod]
 ```
 
----
+- **`[gitlab]` section**:
+    - `url`: The base URL of your GitLab instance.
+    - `token`: Your personal GitLab access token. The script now reads the token from here.
+    - `prod_group_id` / `non_prod_group_id`: The numeric IDs for the GitLab groups that hold your projects. This is used by the `--update` command.
 
-## ⚙️ Configuration
+## How to Use
 
-### `sync-config.json`
+The script has three modes of operation.
 
-Defines services, environments, and merge rules.
+### 1. Update Project Cache (First-Time Setup)
 
-```json
-{
-  "gitlab": {
-    "url": "https://gitlab.com/api/v4",
-    "token_env": "GITLAB_TOKEN",
-    "default_project_id": "12345678",
-    "default_source_branch": "develop"
-  },
-  "services": {
-    "accounts-service": {
-      "project_id": "12345678",
-      "config_file": "src/main/resources/application.properties",
-      "ignore_keys": ["dbUrl", "dbUser", "dbPassword"],
-      "merge_strategy": {
-        "allowedHosts": "union",
-        "spring.profiles.active": "replace"
-      },
-      "target_branches": ["staging", "production"]
-    },
-    "expenses-service": {
-      "project_id": "23456789",
-      "config_file": "src/main/resources/application.properties",
-      "ignore_keys": ["dbUrl", "dbUser", "dbPassword"],
-      "merge_strategy": {
-        "allowedIPs": "union",
-        "log.level": "replace"
-      },
-      "target_branches": ["staging", "uat", "production"]
-    }
-  }
-}
-```
-
----
-
-### `config-schema.json`
-
-Defines validation rules for all configuration files.
-
-```json
-{
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "type": "object",
-  "properties": {
-    "dbUrl": { "type": "string", "format": "uri" },
-    "dbUser": { "type": "string" },
-    "dbPassword": { "type": "string" },
-    "allowedHosts": { "type": "array", "items": { "type": "string" } },
-    "allowedIPs": { "type": "array", "items": { "type": "string" } },
-    "spring.profiles.active": {
-      "type": "string",
-      "enum": ["dev", "staging", "uat", "production"]
-    },
-    "log.level": {
-      "type": "string",
-      "enum": ["DEBUG", "INFO", "WARN", "ERROR"]
-    }
-  },
-  "required": ["dbUrl", "dbUser", "dbPassword"]
-}
-```
-
----
-
-## 🚀 Usage
-
-### 1. Install dependencies
+Before using the interactive mode, you need to build a local cache of your projects. Run the script with the `--update` flag:
 
 ```bash
-pip install -r requirements.txt
+python sync-configs.py --update
 ```
 
-### 2. Export your GitLab token
+This will connect to GitLab, find all the projects in the groups you configured, and store their names and IDs in the `sync-config.ini` file.
+
+### 2. Interactive Mode (Recommended for Manual Use)
+
+For a user-friendly, guided experience, run the script with no arguments:
 
 ```bash
-export GITLAB_TOKEN="your_token_here"
+python sync-configs.py
 ```
 
-### 3. Run the sync
+The script will launch a menu that walks you through selecting the environment, projects, branches, and files to sync.
+
+### 3. Automated / Flag-Based Mode
+
+For scripting and automation, you can pass all the necessary information as command-line flags.
+
+**Example 1: Sync different files in the same branch**
+
+(e.g., `DEV-ABC.ini` -> `SIT-ABC.ini` on the `main` branch)
 
 ```bash
-python sync.py --service accounts-service --source-branch develop --target-branches staging production
+python sync-configs.py \
+    --target-project-id 12345 \
+    --source-branch main \
+    --target-branch main \
+    --source-env DEV-ABC.ini \
+    --target-envs SIT-ABC.ini
 ```
 
-### 4. Apply to multiple target branches (auto mode)
+**Example 2: Sync a file across different branches in the same project**
+
+(e.g., `config.ini` from `develop` -> `release/v1.0`)
 
 ```bash
-python sync.py --service accounts-service --apply-to-multiple-target-branches
+python sync-configs.py \
+    --target-project-id 12345 \
+    --source-branch develop \
+    --target-branch release/v1.0 \
+    --source-env config.ini \
+    --target-envs config.ini
 ```
 
----
-
-## Command-line Options
-
-The script offers a range of command-line options to control its behavior.
-
-| Option | Description | Default |
-| :--- | :--- | :--- |
-| `--repo-url` | **(Required)** The URL of the GitLab repository to operate on. | `None` |
-| `--project-id` | **(Required)** The ID of the GitLab project. | `None` |
-| `--gitlab-url` | The base URL of the GitLab instance. | `https://gitlab.com` |
-| `--config-file` | The path to the synchronization configuration file (e.g., `sync-config.json`). This can be a path within the repository or a local file path. | `sync-config.json` |
-| `--source-branch` | The branch from which to source the configuration changes. | `develop` |
-| `--source-commit` | The specific commit hash to sync from. If provided, this overrides the `--source-branch` option. | `None` |
-| `--source-config-filename` | The name of the configuration file in the source directory (e.g., `config.json`). | `config.json` |
-| `--target-config-filename` | The name of the configuration file in the target directory (e.g., `config.json`). | `config.json` |
-| `--target-branches` | **(Required)** A list of one or more target branches to which the configuration changes should be applied (e.g., release branches). | `None` |
-| `--from-env` | The source environment from which to read the configuration (e.g., `dev`). | `dev` |
-| `--to-env` | **(Required)** A list of one or more target environments to which the configuration should be applied. | `None` |
-| `--services` | **(Required)** A list of service folder names to be processed. | `None` |
-| `--gitlab-token-env` | The name of the environment variable that holds the GitLab private access token. | `GITLAB_TOKEN` |
-| `--csv-sep` | The separator character used for values that should be treated as CSV lists for merging. | `,` |
-| `--dry-run` | If set, the script will perform a dry run, showing the changes that would be made without actually committing or pushing them. No branches or MRs will be created. | `False` |
-| `--branch-prefix` | The prefix to use when creating new branches for the configuration changes. | `bugfix/coreb-000-auto-app-config` |
-| `--commit-message` | The commit message to use when committing the configuration changes. | `chore(config): auto-sync app configuration` |
-| `--mr-labels` | A comma-separated list of labels to apply to the created Merge Requests. | `""` |
-| `--schemas-dir` | The directory where the service-specific JSON schemas are located. This can be a path within the repository or a local directory. | `schemas` |
-| `--fetch-depth` | The depth to use when fetching the Git repository history. A value of `0` fetches the full history, which is recommended for a reliable 3-way merge. | `0` |
-
----
-
-## 📖 Script Walkthrough
-
-### Main Functions
-
-#### `load_config()`
-
-* Loads `sync-config.json`.
-* Returns service definitions, ignore keys, and strategies.
-
-#### `validate_config(path, schema_path)`
-
-* Validates a config file against `config-schema.json`.
-* Exits with error (red output) if invalid.
-
-#### `three_way_merge(base, source, target)`
-
-* Detects conflicts using Git history.
-* Applies per-key strategies (union vs replace).
-* Warns on ignored property changes.
-
-#### `push_file_to_gitlab(url, project_id, branch, filepath, content, token)`
-
-* Updates or creates config files via GitLab API.
-
-#### `create_merge_request(project_id, branch, target_branch, title, body)`
-
-* Creates MR via GitLab API.
-* Includes a **diff summary** in MR body.
-
----
-
-## 🖌️ Color-coded Warnings
-
-* **Yellow**: Ignored property updated in `develop` branch.
-* **Red**: Validation failed → commit blocked.
-
----
-
-## Example Run
+**Example 3: Sync a file between two different projects (Non-Prod to Prod)**
 
 ```bash
-python sync.py --service accounts-service --source-branch develop --target-branches release/v1.0.0
+python sync-configs.py \
+    --source-project-id 12345 \
+    --target-project-id 67890 \
+    --source-branch main \
+    --target-branch production \
+    --source-env config.ini \
+    --target-envs config.ini
 ```
 
-Output:
+## Command-Line Arguments
 
-```
-[INFO] Validating configs with schema...
-[OK]   accounts-service/application.properties is valid.
-[WARN] dbUrl updated in develop. Please manually verify in staging/prod.
-[INFO] Creating MR: Sync configs from develop → release/v1.0.0
-[OK]   MR created: https://gitlab.com/org/accounts-service/-/merge_requests/42
-```
-
----
-
-## 🔮 Future Enhancements
-
-* Teams notifications on MR creation.
-* Auto-resolve safe conflicts.
-* GUI.
----
+- `--update`: Update the local cache of GitLab projects and exit.
+- `-tp`, `--target-project-id`: GitLab Project ID to sync TO.
+- `-sp`, `--source-project-id`: GitLab Project ID to sync FROM. If omitted, uses target-project-id.
+- `-tb`, `--target-branch`: Target branch for sync.
+- `-sb`, `--source-branch`: Source branch name (default: `main`).
+- `-sc`, `--source-commit`: Source commit hash (overrides source-branch).
+- `-se`, `--source-env`: Source environment file name.
+- `-te`, `--target-envs`: List of one or more target environment files.
+- `-c`, `--config-file`: Path to the script\'s configuration file (default: `sync-config.ini`).
+- `-d`, `--dry-run`: Show changes without writing files or creating an MR.
+- `-p`, `--branch-prefix`: Prefix for the automatically created branch name.
+- `-m`, `--commit-message`: The commit message to use.
