@@ -3,30 +3,35 @@
 sync-configs.py - Advanced configuration synchronization tool for .ini files.
 
 Supports multiple modes of operation:
-- Interactive, menu-driven mode for guided syncing.
 - Non-interactive (flag-based) mode for automation.
 - A cache update mode to refresh local project lists from GitLab.
 """
 
 import argparse
-import configparser
-import difflib
 import os
-import random
-import shutil
-import subprocess
+import re
 import sys
-import tempfile
+import json
 import time
+import uuid
+import tempfile
+import argparse
+import configparser
+import subprocess
+from datetime import datetime
 from pathlib import Path
-import fnmatch
+from typing import Dict, List, Optional, Tuple, Any
+
 import requests
-from typing import List, Dict, Tuple, Set, Any, Optional
+from colorama import init, Fore, Style, Set, Any, Optional
 
 # ------------------------------------------------------------------------------
 # SECTION 1: Core Utilities & Helpers
 # ------------------------------------------------------------------------------
 
+def is_temp_branch(branch: str) -> bool:
+    """Check if a branch name matches the temporary branch naming convention."""
+    return re.match(r"tmp-sync-\d{8}-\d{6}-[0-9a-f]{8}", branch) is not None
 def colored(text: str, color: str) -> str:
     colors = {"red": "\033[91m", "green": "\033[92m", "yellow": "\033[93m", "blue": "\033[94m", "cyan": "\033[96m", "reset": "\033[0m"}
     return f"{colors.get(color, '')}{text}{colors['reset']}"
@@ -216,11 +221,50 @@ def compute_three_way_ancestor(repo_path: str, source_ref: str, target_ref: str)
         return subprocess.run(["git", "merge-base", source_ref, target_ref], cwd=repo_path, capture_output=True, text=True, check=True).stdout.strip()
     except subprocess.CalledProcessError: return None
 
-def create_and_push_branch(repo_path: str, new_branch: str, commit_message: str):
-    subprocess.run(["git", "checkout", "-b", new_branch], cwd=repo_path, check=True, capture_output=True)
-    subprocess.run(["git", "add", "."], cwd=repo_path, check=True, capture_output=True)
-    subprocess.run(["git", "commit", "-m", commit_message], cwd=repo_path, check=True, capture_output=True)
-    subprocess.run(["git", "push", "-u", "origin", new_branch], cwd=repo_path, check=True, capture_output=True)
+def create_and_push_branch(repo_path: str, new_branch: str, commit_message: str, source_branch: str = None, is_temp_branch: bool = False):
+    """Create a new branch, commit changes, and push to remote.
+    
+    Args:
+        repo_path: Path to the git repository
+        new_branch: Name of the new branch to create
+        commit_message: Commit message
+        source_branch: Optional source branch to base the new branch on
+        is_temp_branch: Whether this is a temporary branch for same-branch sync
+    """
+    try:
+        # If source_branch is provided, create the new branch from it
+        if source_branch:
+            subprocess.run(["git", "checkout", source_branch], cwd=repo_path, check=True, capture_output=True, text=True)
+        
+        # Create and switch to the new branch
+        subprocess.run(["git", "checkout", "-b", new_branch], cwd=repo_path, check=True, capture_output=True, text=True)
+        
+        # Add and commit changes
+        subprocess.run(["git", "add", "."], cwd=repo_path, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "commit", "-m", commit_message], cwd=repo_path, check=True, capture_output=True, text=True)
+        
+        # Push the new branch to remote
+        push_cmd = ["git", "push", "-u", "origin", new_branch]
+        result = subprocess.run(push_cmd, cwd=repo_path, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            if "has no upstream branch" in result.stderr:
+                # Try to set upstream if not set
+                subprocess.run(["git", "push", "--set-upstream", "origin", new_branch], 
+                             cwd=repo_path, check=True, capture_output=True, text=True)
+            else:
+                result.check_returncode()  # Raise error for other issues
+        
+        print(colored(f"\nSuccessfully created and pushed branch: {new_branch}", "green"))
+        return True
+        
+    except subprocess.CalledProcessError as e:
+        print(colored(f"\nError creating/pushing branch {new_branch}:", "red"))
+        if e.stderr:
+            print(colored(e.stderr.strip(), "red"))
+        if e.stdout:
+            print(colored(e.stdout.strip(), "yellow"))
+        return False
 
 def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch: str, target_branch: str, title: str, description: str) -> bool:
     """Create a merge request in GitLab.
@@ -357,68 +401,193 @@ def update_projects_cache(config_file: str, gitlab_url: str, token: str):
     print(colored("Project cache updated successfully!", "green"))
 
 def run_sync_operation(args: argparse.Namespace, token: str):
-    config = configparser.ConfigParser(); config.read(args.config_file)
+    config = configparser.ConfigParser()
+    config.read(args.config_file)
     gitlab_url = config.get('gitlab', 'url', fallback='https://gitlab.com')
     ignore_keys = config.get('ignore', 'keys', fallback='').split()
     csv_strategy = config.get('defaults', 'csv_strategy', fallback='union')
+    
+    # Get target project info
     target_info = get_project_info(gitlab_url, args.target_project_id, token)
+    if not target_info:
+        print(colored(f"Error: Could not find target project {args.target_project_id}", "red"))
+        sys.exit(1)
+    
+    # Check if this is a temporary branch for same-branch sync
+    is_temp_branch_sync = hasattr(args, 'original_target_branch')
+    target_branch = getattr(args, 'original_target_branch', args.target_branch)
+    
     tmpdir = tempfile.mkdtemp(prefix="config-sync-")
     try:
         print(f"Cloning target repo {target_info['path_with_namespace']}...")
-        clone_repo(target_info["http_url_to_repo"], token, args.target_branch, tmpdir)
-        target_ref, is_same_repo = f"origin/{args.target_branch}", args.source_project_id == args.target_project_id
+        
+        # Clone the target branch (or source branch for temp branch sync)
+        clone_branch = target_branch if not is_temp_branch_sync else args.source_branch
+        clone_repo(target_info["http_url_to_repo"], token, clone_branch, tmpdir)
+        
+        # Set up source and target references
+        target_ref = f"origin/{target_branch}"
+        is_same_repo = args.source_project_id == args.target_project_id
+        
         if not is_same_repo:
             source_info = get_project_info(gitlab_url, args.source_project_id, token)
             print(f"Adding source remote for {source_info['path_with_namespace']}...")
-            subprocess.run(["git", "remote", "add", "source", source_info["http_url_to_repo"]], cwd=tmpdir, check=True)
-            subprocess.run(["git", "fetch", "source", args.source_branch], cwd=tmpdir, check=True, capture_output=True)
+            subprocess.run(["git", "remote", "add", "source", source_info["http_url_to_repo"]], 
+                         cwd=tmpdir, check=True, capture_output=True, text=True)
+            subprocess.run(["git", "fetch", "source", args.source_branch], 
+                         cwd=tmpdir, check=True, capture_output=True, text=True)
             source_ref = args.source_commit or f"source/{args.source_branch}"
         else:
-            if not args.source_commit: subprocess.run(["git", "fetch", "origin", args.source_branch], cwd=tmpdir, check=True, capture_output=True)
+            if not args.source_commit: 
+                subprocess.run(["git", "fetch", "origin", args.source_branch], 
+                             cwd=tmpdir, check=True, capture_output=True, text=True)
             source_ref = args.source_commit or f"origin/{args.source_branch}"
-        is_same_branch = is_same_repo and args.source_branch == args.target_branch
+        
+        # For same-branch sync with temp branch, we need to create the target branch
+        if is_temp_branch_sync and not args.dry_run:
+            subprocess.run(["git", "checkout", "-b", args.target_branch], 
+                         cwd=tmpdir, check=True, capture_output=True, text=True)
+        
+        # Determine merge base
+        is_same_branch = is_same_repo and args.source_branch == target_branch
         ancestor = None if is_same_branch else compute_three_way_ancestor(tmpdir, source_ref, target_ref)
         if not is_same_branch and not ancestor:
             print(colored("Warning: No common ancestor. Using 2-way merge.", "yellow"))
+        
         all_changes, all_conflicts, all_diffs, files_to_commit = [], [], [], []
+        
         for target_env in args.target_envs:
             print(colored(f"\n--- Processing {args.source_env} -> {target_env} ---", "blue"))
+            
+            # Get file contents
             src_content = get_file_content_from_ref(tmpdir, source_ref, args.source_env)
             tgt_content = get_file_content_from_ref(tmpdir, target_ref, target_env)
+            
             if not src_content:
-                print(colored(f"Warning: Source file not found. Skipping.", "yellow"))
+                print(colored(f"Warning: Source file '{args.source_env}' not found. Skipping.", "yellow"))
                 continue
+                
+            # Perform the merge
             if is_same_branch or not ancestor:
-                merged_cfg, changes = merge_ini_two_way(parse_ini_from_string(src_content), parse_ini_from_string(tgt_content), ignore_keys, csv_strategy)
+                merged_cfg, changes = merge_ini_two_way(
+                    parse_ini_from_string(src_content), 
+                    parse_ini_from_string(tgt_content) if tgt_content else configparser.ConfigParser(),
+                    ignore_keys, 
+                    csv_strategy
+                )
                 conflicts = []
             else:
                 anc_content = get_file_content_from_ref(tmpdir, ancestor, target_env)
-                merged_cfg, changes, conflicts = merge_ini_three_way(parse_ini_from_string(anc_content), parse_ini_from_string(src_content), parse_ini_from_string(tgt_content), ignore_keys, csv_strategy)
-            if conflicts: all_conflicts.extend([f"[{target_env}] {c}" for c in conflicts])
-            if changes: all_changes.extend([f"[{target_env}] {c}" for c in changes])
+                merged_cfg, changes, conflicts = merge_ini_three_way(
+                    parse_ini_from_string(anc_content) if anc_content else configparser.ConfigParser(),
+                    parse_ini_from_string(src_content),
+                    parse_ini_from_string(tgt_content) if tgt_content else configparser.ConfigParser(),
+                    ignore_keys,
+                    csv_strategy
+                )
+            
+            if conflicts:
+                all_conflicts.extend([f"[{target_env}] {c}" for c in conflicts])
+            if changes:
+                all_changes.extend([f"[{target_env}] {c}" for c in changes])
+            
+            # Write changes if there are any
             merged_content = config_to_string(merged_cfg)
-            if tgt_content != merged_content:
-                all_diffs.append(unified_diff_str(tgt_content, merged_content, fromfile=target_env, tofile=target_env))
-                if not args.dry_run: (Path(tmpdir) / target_env).write_text(merged_content)
-                files_to_commit.append(target_env)
+            if not tgt_content or tgt_content != merged_content:
+                all_diffs.append(unified_diff_str(
+                    tgt_content if tgt_content else "", 
+                    merged_content, 
+                    fromfile=target_env, 
+                    tofile=target_env
+                ))
+                if not args.dry_run:
+                    file_path = Path(tmpdir) / target_env
+                    file_path.parent.mkdir(parents=True, exist_ok=True)
+                    file_path.write_text(merged_content)
+                    files_to_commit.append(target_env)
+        
+        # Handle conflicts and no-changes cases
         if all_conflicts:
             print(colored("\nConflicts detected! Aborting.", "red"))
             for c in all_conflicts:
                 print(f"  - {c}")
             sys.exit(1)
+                
         if not files_to_commit:
             print(colored("\nNo changes to sync.", "green"))
             sys.exit(0)
-        print(colored("\nDiff:", "yellow"))
+        
+        # Show diffs
+        print(colored("\nChanges to be committed:", "yellow"))
         print("\n".join(all_diffs))
+        
         if args.dry_run:
             print(colored("\nDRY-RUN: No files written, no MR created.", "yellow"))
             sys.exit(0)
-        new_branch = f"{args.branch_prefix}-{random.randint(1000, 9999)}"
-        create_and_push_branch(tmpdir, new_branch, args.commit_message)
-        mr_title = f"chore(config): Automated configuration sync from {args.source_env}"
-        mr_desc = f"Automated sync from `{args.source_project_id}:{args.source_branch}:{args.source_env}` to `{args.target_project_id}:{args.target_branch}`.\n\n**Changes:**\n- " + "\n- ".join(all_changes)
-        create_gitlab_mr(gitlab_url, args.target_project_id, token, new_branch, args.target_branch, mr_title, mr_desc)
+        
+        # For temp branch sync, we already created the branch earlier
+        if not is_temp_branch_sync:
+            # Create a new branch for the changes
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            new_branch = f"{args.branch_prefix}-{timestamp}"
+            create_and_push_branch(
+                repo_path=tmpdir,
+                new_branch=new_branch,
+                commit_message=args.commit_message,
+                source_branch=target_branch
+            )
+        else:
+            new_branch = args.target_branch
+            # Add and commit changes
+            subprocess.run(["git", "add", "."], cwd=tmpdir, check=True, capture_output=True, text=True)
+            subprocess.run(
+                ["git", "commit", "-m", args.commit_message], 
+                cwd=tmpdir, 
+                check=True, 
+                capture_output=True, 
+                text=True
+            )
+            # Push the new branch
+            subprocess.run(
+                ["git", "push", "-u", "origin", new_branch], 
+                cwd=tmpdir, 
+                check=True, 
+                capture_output=True, 
+                text=True
+            )
+            print(colored(f"\nSuccessfully pushed changes to branch: {new_branch}", "green"))
+        
+        # Create merge request if needed
+        if is_temp_branch_sync or not is_same_branch:
+            mr_title = f"chore(config): Automated configuration sync from {args.source_env}"
+            mr_desc = (
+                f"Automated sync from `{args.source_project_id}:{args.source_branch}:{args.source_env}` "
+                f"to `{args.target_project_id}:{target_branch}`.\n\n"
+                "**Changes:**\n- " + "\n- ".join(all_changes)
+            )
+            
+            create_gitlab_mr(
+                gitlab_url=gitlab_url,
+                project_id=args.target_project_id,
+                token=token,
+                source_branch=new_branch,
+                target_branch=target_branch,
+                title=mr_title,
+                description=mr_desc
+            )
+    except subprocess.CalledProcessError as e:
+        print(colored(f"\nError executing command:", "red"))
+        print(colored(f"Command: {e.cmd}", "red"))
+        if e.stdout:
+            print(colored(f"\nStdout:\n{e.stdout}", "yellow"))
+        if e.stderr:
+            print(colored(f"\nStderr:\n{e.stderr}", "red"))
+        sys.exit(1)
+    except Exception as e:
+        print(colored(f"\nUnexpected error: {str(e)}", "red"))
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
     finally:
         force_rmtree(tmpdir)
 
@@ -450,20 +619,49 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
         print(colored(f"Error: No branches found for target project {tgt_proj_name}", "red"))
         sys.exit(1)
     
-    # If same project is selected, show a warning and ensure different branches are selected
+    # Handle branch selection based on project selection
     if src_proj_name == tgt_proj_name:
-        print(colored("\nNote: Same project selected for source and target. You can sync between different branches or files.", "yellow"))
+        print(colored("\nNote: Same project selected for source and target.", "yellow"))
         
-        # If same project, filter out the source branch from target branch selection
-        available_target_branches = [b for b in tgt_branches if b != args.source_branch]
-        if not available_target_branches:
-            print(colored(f"Error: No other branches available in {tgt_proj_name} besides {args.source_branch}", "red"))
-            sys.exit(1)
-            
-        args.target_branch = select_from_list(
-            f"Select TARGET branch (different from source branch {args.source_branch}):",
-            available_target_branches
+        # Show all branches including the source branch
+        branch_choice = select_from_list(
+            "Select TARGET branch (select same branch to create a temporary branch):",
+            tgt_branches + ["[Create new temporary branch]"]
         )
+        
+        if branch_choice == "[Create new temporary branch]":
+            # Generate a timestamp in milliseconds
+            timestamp = str(int(datetime.now().timestamp() * 1000))
+            
+            # Determine branch type based on target branch name
+            if args.target_branch == 'develop' or args.target_branch.startswith('feature/'):
+                branch_prefix = 'feature/coreb'
+            elif args.target_branch.startswith('release/'):
+                branch_prefix = 'bugfix/coreb'
+            else:
+                branch_prefix = 'hotfix/coreb'
+                
+            args.target_branch = f"{branch_prefix}-{timestamp}-automated-branch"
+            print(colored(f"\nWill create and use temporary branch: {args.target_branch}", "cyan"))
+        else:
+            args.target_branch = branch_choice
+            
+            # If same branch is selected, we'll create a temporary branch for the changes
+            if args.target_branch == args.source_branch:
+                # Generate a timestamp in milliseconds
+                timestamp = str(int(datetime.now().timestamp() * 1000))
+                args.original_target_branch = args.target_branch
+                
+                # Determine branch type based on target branch name
+                if args.target_branch == 'develop' or args.target_branch.startswith('feature/'):
+                    branch_prefix = 'feature/coreb'
+                elif args.target_branch.startswith('release/'):
+                    branch_prefix = 'bugfix/coreb'
+                else:
+                    branch_prefix = 'hotfix/coreb'
+                    
+                args.target_branch = f"{branch_prefix}-{timestamp}-automated-branch"
+                print(colored(f"\nSame branch selected. Will create temporary branch: {args.target_branch}", "cyan"))
     else:
         # Different project, can select any branch
         args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
