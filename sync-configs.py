@@ -440,16 +440,33 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
     args.source_branch = select_from_list("Select SOURCE branch:", src_branches)
     
     print(colored("\n--- Target Project ---", "cyan"))
-    # Remove the selected source project from target options
-    target_projects = {k: v for k, v in projects.items() if k != src_proj_name}
-    if not target_projects:
-        print(colored("Error: No other projects available to select as target", "red"))
-        sys.exit(1)
-        
-    tgt_proj_name = select_from_list("Select TARGET project:", list(target_projects.keys()))
-    args.target_project_id = target_projects[tgt_proj_name]
+    # Allow selecting the same project for source and target
+    tgt_proj_name = select_from_list("Select TARGET project:", list(projects.keys()))
+    args.target_project_id = projects[tgt_proj_name]
+    
+    # Get branches for the target project
     tgt_branches = get_repo_branches(gitlab_url, args.target_project_id, token)
-    args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
+    if not tgt_branches:
+        print(colored(f"Error: No branches found for target project {tgt_proj_name}", "red"))
+        sys.exit(1)
+    
+    # If same project is selected, show a warning and ensure different branches are selected
+    if src_proj_name == tgt_proj_name:
+        print(colored("\nNote: Same project selected for source and target. You can sync between different branches or files.", "yellow"))
+        
+        # If same project, filter out the source branch from target branch selection
+        available_target_branches = [b for b in tgt_branches if b != args.source_branch]
+        if not available_target_branches:
+            print(colored(f"Error: No other branches available in {tgt_proj_name} besides {args.source_branch}", "red"))
+            sys.exit(1)
+            
+        args.target_branch = select_from_list(
+            f"Select TARGET branch (different from source branch {args.source_branch}):",
+            available_target_branches
+        )
+    else:
+        # Different project, can select any branch
+        args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
     
     # Store project names for better error messages
     src_proj_display = f"{src_proj_name} ({args.source_branch})"
