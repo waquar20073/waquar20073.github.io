@@ -80,27 +80,116 @@ def force_rmtree(path: str, max_retries: int = 3, delay: float = 0.7):
 # ------------------------------------------------------------------------------
 
 def get_gitlab_api_paged(url: str, token: str, params: Optional[Dict] = None) -> List[Dict]:
+    """Fetch paginated results from GitLab API.
+    
+    Args:
+        url: API endpoint URL
+        token: GitLab access token
+        params: Optional query parameters
+        
+    Returns:
+        List of results from all pages
+    """
     headers = {"PRIVATE-TOKEN": token}
     results: List[Dict] = []
+    
     try:
         while url:
-            response = requests.get(url, headers=headers, params=params)
+            response = requests.get(url, headers=headers, params=params, timeout=30)
             response.raise_for_status()
-            results.extend(response.json())
+            
+            data = response.json()
+            if not isinstance(data, list):
+                print(colored(f"Unexpected API response format. Expected list, got {type(data).__name__}", "red"))
+                print(f"Response: {data}")
+                return []
+                
+            results.extend(data)
             url = response.links.get('next', {}).get('url')
+            
+            # Reset params after first request as they're included in the next URL
+            params = None
+            
     except requests.exceptions.RequestException as e:
         print(colored(f"GitLab API Error: {e}", "red"))
-        sys.exit(1)
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"Status code: {e.response.status_code}")
+            try:
+                print(f"Response: {e.response.text}")
+            except:
+                pass
+        return []
+        
     return results
 
 def get_project_info(gitlab_url: str, project_id: str, token: str) -> Dict:
-    return get_gitlab_api_paged(f"{gitlab_url}/api/v4/projects/{project_id}", token)[0]
+    """Get project information from GitLab API.
+    
+    Args:
+        gitlab_url: Base URL of the GitLab instance
+        project_id: ID or URL-encoded path of the project
+        token: GitLab access token
+        
+    Returns:
+        Dict containing project information or None if not found
+    """
+    url = f"{gitlab_url}/api/v4/projects/{project_id}"
+    headers = {"PRIVATE-TOKEN": token}
+    
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        print(colored(f"GitLab API Error when fetching project {project_id}: {e}", "red"))
+        if hasattr(e, 'response') and e.response is not None:
+            print(f"Status code: {e.response.status_code}")
+            try:
+                print(f"Response: {e.response.text}")
+            except:
+                pass
+        return None
 
 def get_group_projects(gitlab_url: str, group_id: str, token: str) -> List[Dict]:
-    return get_gitlab_api_paged(f"{gitlab_url}/api/v4/groups/{group_id}/projects", token, {"include_subgroups": "true"})
+    """Get all projects from a GitLab group, including subgroups.
+    
+    Args:
+        gitlab_url: Base URL of the GitLab instance
+        group_id: ID or path of the group
+        token: GitLab access token
+        
+    Returns:
+        List of project dictionaries
+    """
+    url = f"{gitlab_url}/api/v4/groups/{group_id}/projects"
+    params = {
+        "include_subgroups": "true",
+        "per_page": "100",  # Maximum allowed by GitLab
+        "simple": "true"     # Only include essential fields
+    }
+    return get_gitlab_api_paged(url, token, params)
 
 def get_repo_branches(gitlab_url: str, project_id: str, token: str) -> List[str]:
-    return [b['name'] for b in get_gitlab_api_paged(f"{gitlab_url}/api/v4/projects/{project_id}/repository/branches", token)]
+    """Get all branch names for a GitLab repository.
+    
+    Args:
+        gitlab_url: Base URL of the GitLab instance
+        project_id: ID or URL-encoded path of the project
+        token: GitLab access token
+        
+    Returns:
+        List of branch names, or empty list on error
+    """
+    try:
+        branches = get_gitlab_api_paged(
+            f"{gitlab_url}/api/v4/projects/{project_id}/repository/branches",
+            token,
+            {"per_page": "100"}  # Maximum allowed by GitLab
+        )
+        return [b['name'] for b in branches if isinstance(b, dict) and 'name' in b]
+    except Exception as e:
+        print(colored(f"Error getting branches for project {project_id}: {e}", "red"))
+        return []
 
 def get_repo_ini_files(repo_url: str, branch: str, token: str) -> List[str]:
     tmpdir = tempfile.mkdtemp(prefix="ini-list-")
@@ -133,9 +222,47 @@ def create_and_push_branch(repo_path: str, new_branch: str, commit_message: str)
     subprocess.run(["git", "commit", "-m", commit_message], cwd=repo_path, check=True, capture_output=True)
     subprocess.run(["git", "push", "-u", "origin", new_branch], cwd=repo_path, check=True, capture_output=True)
 
-def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch: str, target_branch: str, title: str, description: str):
+def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch: str, target_branch: str, title: str, description: str) -> bool:
+    """Create a merge request in GitLab.
+    
+    Args:
+        gitlab_url: Base URL of the GitLab instance
+        project_id: ID or URL-encoded path of the project
+        token: GitLab access token
+        source_branch: Source branch name
+        target_branch: Target branch name
+        title: MR title
+        description: MR description
+        
+    Returns:
+        bool: True if MR was created successfully, False otherwise
+    """
     api_url = f"{gitlab_url}/api/v4/projects/{project_id}/merge_requests"
-    payload = {"source_branch": source_branch, "target_branch": target_branch, "title": title, "description": description, "remove_source_branch": True}
+    headers = {"PRIVATE-TOKEN": token, "Content-Type": "application/json"}
+    payload = {
+        "source_branch": source_branch,
+        "target_branch": target_branch,
+        "title": title,
+        "description": description,
+        "remove_source_branch": True,
+        "squash": True
+    }
+    
+    try:
+        response = requests.post(api_url, headers=headers, json=payload, timeout=30)
+        response.raise_for_status()
+        print(colored(f"Successfully created merge request: {response.json().get('web_url')}", "green"))
+        return True
+    except requests.exceptions.RequestException as e:
+        error_msg = f"Failed to create merge request: {e}"
+        if hasattr(e, 'response') and e.response is not None:
+            error_msg += f"\nStatus code: {e.response.status_code}"
+            try:
+                error_msg += f"\nResponse: {e.response.text}"
+            except:
+                pass
+        print(colored(error_msg, "red"))
+        return False
     try:
         response = requests.post(api_url, headers={"PRIVATE-TOKEN": token}, json=payload)
         response.raise_for_status()
