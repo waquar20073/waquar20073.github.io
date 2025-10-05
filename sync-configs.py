@@ -39,6 +39,20 @@ class Colors:
 Fore = Colors
 Style = type('Style', (), {'RESET_ALL': Colors.RESET})
 
+def parse_ini_from_string(content: str) -> configparser.ConfigParser:
+    """Parse INI content from a string.
+    
+    Args:
+        content: The INI content as a string
+        
+    Returns:
+        A ConfigParser instance with the parsed content
+    """
+    config = configparser.ConfigParser(interpolation=None)
+    config.optionxform = str
+    config.read_string(content)
+    return config
+    
 # ------------------------------------------------------------------------------
 # SECTION 1: Core Utilities & Helpers
 # ------------------------------------------------------------------------------
