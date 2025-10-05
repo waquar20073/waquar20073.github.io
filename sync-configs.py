@@ -71,17 +71,35 @@ def write_ini_file(file_path: str, config: configparser.ConfigParser):
             f.write("\n")
 
 def select_from_list(prompt: str, options: List[Any]) -> Any:
-{{ ... }}
+    """Display a numbered menu and get user's selection.
+    
+    Args:
+        prompt: The prompt to display to the user
+        options: List of options to display
+        
+    Returns:
+        The selected option from the list
+    """
+    if not options:
+        raise ValueError("No options provided to select from")
+        
     print(prompt)
     for i, option in enumerate(options, 1):
         print(f"  {i}) {option}")
+        
     while True:
         try:
-            choice = int(input("Enter number: "))
-            if 1 <= choice <= len(options):
-                return options[choice - 1]
-            else:
-                print(colored("Invalid number, please try again.", "yellow"))
+            choice = input("Enter number: ").strip()
+            if not choice:  # Handle empty input
+                print(colored("Please enter a number.", "yellow"))
+                continue
+                
+            choice_idx = int(choice) - 1
+            if 0 <= choice_idx < len(options):
+                return options[choice_idx]
+                
+            print(colored(f"Please enter a number between 1 and {len(options)}.", "yellow"))
+            
         except ValueError:
             print(colored("Please enter a valid number.", "yellow"))
 
