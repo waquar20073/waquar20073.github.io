@@ -25,7 +25,19 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any, Set
 
 import requests
-from colorama import init, Fore, Style, Set, Any, Optional
+
+# ANSI color codes for terminal colors
+class Colors:
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    CYAN = '\033[96m'
+    RESET = '\033[0m'
+    
+# Alias for backward compatibility
+Fore = Colors
+Style = type('Style', (), {'RESET_ALL': Colors.RESET})
 
 # ------------------------------------------------------------------------------
 # SECTION 1: Core Utilities & Helpers
@@ -35,8 +47,24 @@ def is_temp_branch(branch: str) -> bool:
     """Check if a branch name matches the temporary branch naming convention."""
     return re.match(r"tmp-sync-\d{8}-\d{6}-[0-9a-f]{8}", branch) is not None
 def colored(text: str, color: str) -> str:
-    colors = {"red": "\033[91m", "green": "\033[92m", "yellow": "\033[93m", "blue": "\033[94m", "cyan": "\033[96m", "reset": "\033[0m"}
-    return f"{colors.get(color, '')}{text}{colors['reset']}"
+    """Colorize text using ANSI escape codes.
+    
+    Args:
+        text: The text to colorize
+        color: One of 'red', 'green', 'yellow', 'blue', 'cyan', or 'reset'
+        
+    Returns:
+        Colored text string with reset code
+    """
+    colors = {
+        "red": Colors.RED,
+        "green": Colors.GREEN,
+        "yellow": Colors.YELLOW,
+        "blue": Colors.BLUE,
+        "cyan": Colors.CYAN,
+        "reset": Colors.RESET
+    }
+    return f"{colors.get(color.lower(), '')}{text}{Colors.RESET}"
 
 def unified_diff_str(a: str, b: str, fromfile: str, tofile: str) -> str:
     """Generate a unified diff between two strings.
