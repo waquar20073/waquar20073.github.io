@@ -306,19 +306,40 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
     projects = {name: id for name, id in config.items(proj_section)}
     
     print(colored("\n--- Source Project ---", "cyan"))
-    src_proj_name = select_from_list("Select SOURCE project:", list(projects.keys()))
+    project_names = list(projects.keys())
+    src_proj_name = select_from_list("Select SOURCE project:", project_names)
     args.source_project_id = projects[src_proj_name]
     src_branches = get_repo_branches(gitlab_url, args.source_project_id, token)
     args.source_branch = select_from_list("Select SOURCE branch:", src_branches)
     
     print(colored("\n--- Target Project ---", "cyan"))
-    tgt_proj_name = select_from_list("Select TARGET project:", list(projects.keys()))
-    args.target_project_id = projects[tgt_proj_name]
+    # Remove the selected source project from target options
+    target_projects = {k: v for k, v in projects.items() if k != src_proj_name}
+    if not target_projects:
+        print(colored("Error: No other projects available to select as target", "red"))
+        sys.exit(1)
+        
+    tgt_proj_name = select_from_list("Select TARGET project:", list(target_projects.keys()))
+    args.target_project_id = target_projects[tgt_proj_name]
     tgt_branches = get_repo_branches(gitlab_url, args.target_project_id, token)
     args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
+    
+    # Store project names for better error messages
+    src_proj_display = f"{src_proj_name} ({args.source_branch})"
+    tgt_proj_display = f"{tgt_proj_name} ({args.target_branch})"
 
     proj_info = get_project_info(gitlab_url, args.source_project_id, token)
-    ini_files = get_repo_ini_files(proj_info['http_url_to_repo'], args.source_branch, token)
+    if not proj_info or not isinstance(proj_info, dict) or 'http_url_to_repo' not in proj_info:
+        print(colored(f"Error: Could not retrieve project information for project ID {args.source_project_id}", "red"))
+        print(f"Debug - proj_info: {proj_info}")
+        sys.exit(1)
+    
+    repo_url = proj_info['http_url_to_repo']
+    if not repo_url:
+        print(colored(f"Error: Project {args.source_project_id} has no repository URL", "red"))
+        sys.exit(1)
+        
+    ini_files = get_repo_ini_files(repo_url, args.source_branch, token)
     if not ini_files:
         print(colored(f"No .ini files found in {src_proj_name} on branch {args.source_branch}", "red"))
         sys.exit(1)
