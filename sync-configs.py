@@ -292,15 +292,32 @@ def get_repo_branches(gitlab_url: str, project_id: str, token: str) -> List[str]
         print(colored(f"Error getting branches for project {project_id}: {e}", "red"))
         return []
 
+# When showing the file list, you might want to indicate which files exist in target
 def get_repo_ini_files(repo_url: str, branch: str, token: str) -> List[str]:
-    tmpdir = tempfile.mkdtemp(prefix="ini-list-")
-    try:
-        print(f"Cloning repo to list .ini files...", end='\r')
-        clone_repo(repo_url, token, branch, tmpdir)
-        print(" "*50, end='\r') # Clear line
-        return sorted([str(p.relative_to(tmpdir)) for p in Path(tmpdir).rglob('*.ini')])
-    finally:
-        force_rmtree(tmpdir)
+    """Get list of .ini files in the repository.
+    
+    Args:
+        repo_url: Git repository URL
+        branch: Branch to check
+        token: GitLab access token
+        
+    Returns:
+        List of .ini file paths
+    """
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Clone the repo
+        subprocess.run(["git", "clone", "--branch", branch, "--single-branch", repo_url, tmpdir], 
+                      check=True, capture_output=True)
+        
+        # Find all .ini files
+        ini_files = []
+        for root, _, files in os.walk(tmpdir):
+            for file in files:
+                if file.endswith('.ini'):
+                    # Get relative path from repo root
+                    rel_path = os.path.relpath(os.path.join(root, file), tmpdir)
+                    ini_files.append(rel_path)
+        return ini_files
 
 def clone_repo(repo_url: str, token: str, branch: str, tmpdir: str):
     auth_url = f"https://oauth2:{token}@{repo_url.split('https://')[1]}" if token and repo_url.startswith('https://') else repo_url
@@ -421,17 +438,17 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     merged_config.optionxform = str
     merged_config.read_dict(target_config)
     
-    if 'Default' not in merged_config:
-        merged_config.add_section('Default')
+    if 'DEFAULT' not in merged_config:
+        merged_config.add_section('DEFAULT')
     
     # Handle updates and new keys from source
-    if 'Default' in source_config:
-        src = source_config['Default']
+    if 'DEFAULT' in source_config:
+        src = source_config['DEFAULT']
         for key, src_val in src.items():
             if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
                 continue
                 
-            tgt_val = merged_config['Default'].get(key)
+            tgt_val = merged_config['DEFAULT'].get(key)
             if src_val == tgt_val:
                 continue
                 
@@ -444,13 +461,13 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
                 final_val = ",".join(sorted(list(tgt_list | src_list)))
             
             if final_val != tgt_val:
-                merged_config.set('Default', key, final_val)
+                merged_config.set('DEFAULT', key, final_val)
                 changes.append(f"Update key '{key}': '{tgt_val}' -> '{final_val}'")
     
     # Find keys in target that are not in source (potential deletions)
-    if 'Default' in target_config:
-        tgt = target_config['Default']
-        src = source_config.get('Default', {}) if 'Default' in source_config else {}
+    if 'DEFAULT' in target_config:
+        tgt = target_config['DEFAULT']
+        src = source_config.get('DEFAULT', {}) if 'DEFAULT' in source_config else {}
         
         for key in list(tgt.keys()):
             if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
@@ -474,7 +491,7 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
                     print(colored(f"Warning: Could not parse key from deletion message: {d}", "yellow"))
                     continue
                 key = key_match.group(1)
-                del merged_config['Default'][key]
+                del merged_config['DEFAULT'][key]
                 changes.append(d)
         else:
             print(colored("Skipping deletions as requested.", "yellow"))
@@ -485,10 +502,10 @@ def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_ke
     changes, conflicts = [], []
     merged_config = configparser.ConfigParser(interpolation=None); merged_config.optionxform = str
     merged_config.read_dict(target_config)
-    anc = ancestor_config['Default'] if 'Default' in ancestor_config else {}
-    src = source_config['Default'] if 'Default' in source_config else {}
-    tgt = target_config['Default'] if 'Default' in target_config else {}
-    if 'Default' not in merged_config: merged_config.add_section('Default')
+    anc = ancestor_config['DEFAULT'] if 'DEFAULT' in ancestor_config else {}
+    src = source_config['DEFAULT'] if 'DEFAULT' in source_config else {}
+    tgt = target_config['DEFAULT'] if 'DEFAULT' in target_config else {}
+    if 'DEFAULT' not in merged_config: merged_config.add_section('DEFAULT')
     all_keys: Set[str] = set(anc.keys()) | set(src.keys()) | set(tgt.keys())
     for key in sorted(list(all_keys)):
         if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys): continue
@@ -508,12 +525,12 @@ def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_ke
             else:
                 final_val, changed = src_val, True
         if src_val is None and anc_val is not None and not tgt_changed:
-            if key in merged_config['Default']: del merged_config['Default'][key]; changes.append(f"Removed key '{key}'")
+            if key in merged_config['DEFAULT']: del merged_config['DEFAULT'][key]; changes.append(f"Removed key '{key}'")
             continue
         if changed:
-            merged_config.set('Default', key, str(final_val)); changes.append(f"Updated key '{key}': '{tgt_val}' -> '{final_val}'")
-        elif final_val is not None and key not in merged_config['Default']:
-             merged_config.set('Default', key, str(final_val)); changes.append(f"Added key '{key}': '{final_val}'")
+            merged_config.set('DEFAULT', key, str(final_val)); changes.append(f"Updated key '{key}': '{tgt_val}' -> '{final_val}'")
+        elif final_val is not None and key not in merged_config['DEFAULT']:
+             merged_config.set('DEFAULT', key, str(final_val)); changes.append(f"Added key '{key}': '{final_val}'")
     return merged_config, changes, conflicts
 
 # ------------------------------------------------------------------------------
