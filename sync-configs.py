@@ -8,19 +8,21 @@ Supports multiple modes of operation:
 """
 
 import argparse
+import configparser
+import difflib
+import fnmatch
+import json
 import os
 import re
+import shutil
+import subprocess
 import sys
-import json
+import tempfile
 import time
 import uuid
-import tempfile
-import argparse
-import configparser
-import subprocess
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Dict, List, Optional, Tuple, Any, Set
 
 import requests
 from colorama import init, Fore, Style, Set, Any, Optional
@@ -37,23 +39,39 @@ def colored(text: str, color: str) -> str:
     return f"{colors.get(color, '')}{text}{colors['reset']}"
 
 def unified_diff_str(a: str, b: str, fromfile: str, tofile: str) -> str:
-    return "".join(difflib.unified_diff(a.splitlines(keepends=True), b.splitlines(keepends=True), fromfile=fromfile, tofile=tofile))
+    """Generate a unified diff between two strings.
+    
+    Args:
+        a: Original text
+        b: Modified text
+        fromfile: Label for original file in diff
+        tofile: Label for modified file in diff
+        
+    Returns:
+        str: Unified diff as a string
+    """
+    return "".join(difflib.unified_diff(
+        a.splitlines(keepends=True), 
+        b.splitlines(keepends=True), 
+        fromfile=fromfile, 
+        tofile=tofile
+    ))
 
-def parse_ini_from_string(content: str) -> configparser.ConfigParser:
-    config = configparser.ConfigParser(interpolation=None)
-    config.optionxform = str
-    config.read_string(content)
-    return config
-
-def config_to_string(config: configparser.ConfigParser) -> str:
-    with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as temp:
-        config.write(temp)
-    with open(temp.name, 'r', encoding='utf-8') as f:
-        content = f.read()
-    os.remove(temp.name)
-    return content
+def write_ini_file(file_path: str, config: configparser.ConfigParser):
+    """Write INI file with consistent formatting."""
+    with open(file_path, 'w') as f:
+        # Custom writer to remove spaces around = and after commas
+        for section in config.sections():
+            f.write(f"[{section}]\n")
+            for key, value in config[section].items():
+                # Remove spaces after commas in list values
+                if ',' in value:
+                    value = ','.join([v.strip() for v in value.split(',')])
+                f.write(f"{key}={value}\n")
+            f.write("\n")
 
 def select_from_list(prompt: str, options: List[Any]) -> Any:
+{{ ... }}
     print(prompt)
     for i, option in enumerate(options, 1):
         print(f"  {i}) {option}")
@@ -320,24 +338,69 @@ def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch
 
 def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     changes = []
-    merged_config = configparser.ConfigParser(interpolation=None); merged_config.optionxform = str
+    deletions = []
+    merged_config = configparser.ConfigParser(interpolation=None)
+    merged_config.optionxform = str
     merged_config.read_dict(target_config)
-    if 'Default' not in source_config: return merged_config, changes
-    if 'Default' not in merged_config: merged_config.add_section('Default')
-    src = source_config['Default']
-    for key, src_val in src.items():
-        if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys): continue
-        tgt_val = merged_config['Default'].get(key)
-        if src_val == tgt_val: continue
-        is_csv = (src_val and ',' in src_val) or (tgt_val and ',' in tgt_val)
-        final_val = src_val
-        if is_csv and csv_strategy == 'union':
-            src_list = {s.strip() for s in (src_val or '').split(',') if s.strip()}
-            tgt_list = {s.strip() for s in (tgt_val or '').split(',') if s.strip()}
-            final_val = ",".join(sorted(list(tgt_list | src_list)))
-        if final_val != tgt_val:
-            merged_config.set('Default', key, final_val)
-            changes.append(f"Updated key '{key}': '{tgt_val}' -> '{final_val}'")
+    
+    if 'Default' not in merged_config:
+        merged_config.add_section('Default')
+    
+    # Handle updates and new keys from source
+    if 'Default' in source_config:
+        src = source_config['Default']
+        for key, src_val in src.items():
+            if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
+                continue
+                
+            tgt_val = merged_config['Default'].get(key)
+            if src_val == tgt_val:
+                continue
+                
+            is_csv = (src_val and ',' in src_val) or (tgt_val and ',' in tgt_val)
+            final_val = src_val
+            
+            if is_csv and csv_strategy == 'union':
+                src_list = {s.strip() for s in (src_val or '').split(',') if s.strip()}
+                tgt_list = {s.strip() for s in (tgt_val or '').split(',') if s.strip()}
+                final_val = ",".join(sorted(list(tgt_list | src_list)))
+            
+            if final_val != tgt_val:
+                merged_config.set('Default', key, final_val)
+                changes.append(f"Update key '{key}': '{tgt_val}' -> '{final_val}'")
+    
+    # Find keys in target that are not in source (potential deletions)
+    if 'Default' in target_config:
+        tgt = target_config['Default']
+        src = source_config.get('Default', {}) if 'Default' in source_config else {}
+        
+        for key in list(tgt.keys()):
+            if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
+                continue
+                
+            if key not in src:
+                deletions.append(f"Remove key '{key}': '{tgt[key]}'")
+    
+    # If there are deletions, ask for confirmation
+    if deletions:
+        print("\n" + colored("The following keys will be removed:", "yellow"))
+        for d in deletions:
+            print(f"  - {d}")
+            
+        confirm = input("\nDo you want to proceed with these deletions? [y/N] ").strip().lower()
+        if confirm == 'y':
+            for d in deletions:
+                # Extract key from deletion message more reliably
+                key_match = re.search(r"Remove key '([^']+)'")
+                if not key_match:
+                    print(colored(f"Warning: Could not parse key from deletion message: {d}", "yellow"))
+                    continue
+                key = key_match.group(1)
+                del merged_config['Default'][key]
+                changes.append(d)
+        else:
+            print(colored("Skipping deletions as requested.", "yellow"))
+    
     return merged_config, changes
 
 def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_keys, csv_strategy):
