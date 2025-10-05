@@ -39,6 +39,24 @@ class Colors:
 Fore = Colors
 Style = type('Style', (), {'RESET_ALL': Colors.RESET})
 
+
+def config_to_string(config: configparser.ConfigParser) -> str:
+    """Convert a ConfigParser object to a properly formatted INI string.
+    
+    Args:
+        config: The ConfigParser instance to convert
+        
+    Returns:
+        str: The formatted INI content as a string
+    """
+    output = []
+    for section in config.sections():
+        output.append(f"[{section}]")
+        for key, value in config[section].items():
+            output.append(f"{key}={value}")
+        output.append("")  # Add empty line between sections
+    return "\n".join(output)
+    
 def parse_ini_from_string(content: str) -> configparser.ConfigParser:
     """Parse INI content from a string.
     
@@ -52,7 +70,7 @@ def parse_ini_from_string(content: str) -> configparser.ConfigParser:
     config.optionxform = str
     config.read_string(content)
     return config
-    
+
 # ------------------------------------------------------------------------------
 # SECTION 1: Core Utilities & Helpers
 # ------------------------------------------------------------------------------
