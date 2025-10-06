@@ -665,10 +665,15 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     print("DEBUG: Starting merge_ini_two_way")
     print("Source config sections:", list(source_config.keys()))
     print("Target config sections:", list(target_config.keys()))
+    print("Ignored keys:", ignore_keys)  # Debug output for ignored keys
     
     changes = []
     deletions = []
     merged_config = {'DEFAULT': {}}
+    
+    # Convert ignore_keys to a list if it's a string
+    if isinstance(ignore_keys, str):
+        ignore_keys = [ignore_keys] if ignore_keys else []
     
     # Get source and target sections (default to empty dict if not found)
     src = source_config.get('DEFAULT', {})
@@ -680,7 +685,9 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     
     # Process updates and new keys from source
     for key, src_val in src.items():
-        if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
+        # Skip ignored keys
+        if ignore_keys and any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
+            print(f"DEBUG: Skipping ignored key: {key}")
             continue
             
         tgt_val = tgt.get(key, '')
@@ -691,9 +698,23 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
         final_val = src_val
         
         if is_csv and csv_strategy == 'union':
-            src_list = {s.strip() for s in (src_val or '').split(',') if s.strip()}
-            tgt_list = {s.strip() for s in (tgt_val or '').split(',') if s.strip()}
-            final_val = ",".join(sorted(list(tgt_list | src_list)))
+            # Preserve original order while removing duplicates
+            seen = set()
+            src_list = []
+            for item in (src_val or '').split(','):
+                item = item.strip()
+                if item and item not in seen:
+                    seen.add(item)
+                    src_list.append(item)
+            
+            # Add target values that aren't in source
+            for item in (tgt_val or '').split(','):
+                item = item.strip()
+                if item and item not in seen:
+                    seen.add(item)
+                    src_list.append(item)
+            
+            final_val = ",".join(src_list)
         
         if final_val != tgt_val:
             merged_config['DEFAULT'][key] = final_val
@@ -739,6 +760,10 @@ def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_ke
     changes, conflicts = [], []
     merged_config = {'DEFAULT': {}}
     
+    # Convert ignore_keys to a list if it's a string
+    if isinstance(ignore_keys, str):
+        ignore_keys = [ignore_keys] if ignore_keys else []
+    
     # Get all sections as dictionaries
     anc = ancestor_config.get('DEFAULT', {})
     src = source_config.get('DEFAULT', {})
@@ -748,8 +773,10 @@ def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_ke
     merged_config['DEFAULT'].update(tgt)
     
     all_keys = set(anc.keys()) | set(src.keys()) | set(tgt.keys())
-    for key in sorted(list(all_keys)):
-        if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
+    for key in all_keys:
+        # Skip ignored keys
+        if ignore_keys and any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
+            print(f"DEBUG: Skipping ignored key in three-way merge: {key}")
             continue
             
         anc_val = anc.get(key)
@@ -770,10 +797,26 @@ def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_ke
         if src_changed and src_val != tgt_val:
             is_csv = (src_val and ',' in src_val) or (tgt_val and ',' in tgt_val)
             if is_csv and csv_strategy == 'union':
-                src_list = {s.strip() for s in (src_val or '').split(',') if s.strip()}
-                tgt_list = {s.strip() for s in (tgt_val or '').split(',') if s.strip()}
-                anc_list = {s.strip() for s in (anc_val or '').split(',') if s.strip()}
-                final_val = ",".join(sorted(list(tgt_list | (src_list - anc_list))))
+                # Preserve order while handling CSV values
+                seen = set()
+                result = []
+                
+                # First add all target values
+                for item in (tgt_val or '').split(','):
+                    item = item.strip()
+                    if item and item not in seen:
+                        seen.add(item)
+                        result.append(item)
+                
+                # Then add source values that aren't in target or ancestor
+                anc_set = {s.strip() for s in (anc_val or '').split(',') if s.strip()}
+                for item in (src_val or '').split(','):
+                    item = item.strip()
+                    if item and item not in seen and item not in anc_set:
+                        seen.add(item)
+                        result.append(item)
+                
+                final_val = ",".join(result)
                 changed = final_val != tgt_val
             else:
                 final_val = src_val
@@ -998,7 +1041,8 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         
         # Create merge request if needed
         if hasattr(args, 'create_mr') and args.create_mr:
-            create_gitlab_mr(
+            print(colored("\n=== Creating Merge Request ===", "cyan"))
+            mr_created = create_gitlab_mr(
                 gitlab_url=gitlab_url,
                 project_id=args.target_project_id,
                 token=token,
@@ -1007,6 +1051,10 @@ def run_sync_operation(args: argparse.Namespace, token: str):
                 title=f"chore: Update {args.target_envs[0]} from {args.source_branch}",
                 description="Automated configuration sync"
             )
+            if not mr_created:
+                print(colored("\nFailed to create merge request. You can create it manually with:", "yellow"))
+                print(colored(f"Source branch: {new_branch}", "yellow"))
+                print(colored(f"Target branch: {args.target_branch}\n", "yellow"))
     except subprocess.CalledProcessError as e:
         print(colored(f"\nError executing command:", "red"))
         print(colored(f"Command: {e.cmd}", "red"))
@@ -1179,8 +1227,13 @@ def main():
     parser.add_argument("-d", "--dry-run", action="store_true", help="Show changes without writing files or creating MRs.")
     parser.add_argument("-p", "--branch-prefix", default="feature/auto-config-sync")
     parser.add_argument("-m", "--commit-message", default="chore(config): Automated configuration sync")
+    parser.add_argument("--no-mr", action="store_false", dest="create_mr", help="Disable automatic MR creation")
 
     args = parser.parse_args()
+    
+    # Enable MR creation by default if not explicitly disabled
+    if not hasattr(args, 'create_mr'):
+        args.create_mr = True
     
     # Read and parse config file
     try:
