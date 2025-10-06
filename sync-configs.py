@@ -951,8 +951,15 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         # Change to target repo directory
         os.chdir(tgt_repo_path)
         
-        # Create a new branch for the changes
-        new_branch = f"config-sync/{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        # Create a new branch for the changes with the required naming pattern
+        timestamp = str(int(datetime.now().timestamp() * 1000))
+        if args.target_branch.startswith('release/'):
+            new_branch = f"bugfix/coreb-{timestamp}-config-sync-automation"
+        elif args.target_branch == 'develop' or args.target_branch.startswith('feature/'):
+            new_branch = f"feature/coreb-{timestamp}-config-sync-automation"
+        else:
+            new_branch = f"hotfix/coreb-{timestamp}-config-sync-automation"
+            
         print(colored(f"Creating new branch: {new_branch}", "cyan"))
         
         subprocess.run(["git", "checkout", "-b", new_branch], check=True)
