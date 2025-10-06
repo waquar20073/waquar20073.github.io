@@ -319,9 +319,48 @@ def get_repo_ini_files(repo_url: str, branch: str, token: str) -> List[str]:
                     ini_files.append(rel_path)
         return ini_files
 
-def clone_repo(repo_url: str, token: str, branch: str, tmpdir: str):
-    auth_url = f"https://oauth2:{token}@{repo_url.split('https://')[1]}" if token and repo_url.startswith('https://') else repo_url
-    subprocess.run(["git", "clone", "--branch", branch, "--depth", "1", auth_url, tmpdir], check=True, capture_output=True, text=True)
+def clone_repo(project_id: str, token: str, branch: str, target_dir: str) -> Optional[str]:
+    """Clone a git repository to a target directory.
+    
+    Args:
+        project_id: GitLab project ID or path
+        token: GitLab access token
+        branch: Branch to clone
+        target_dir: Directory to clone into
+        
+    Returns:
+        Path to the cloned repository or None if failed
+    """
+    try:
+        # Clean up target directory if it exists
+        if os.path.exists(target_dir):
+            shutil.rmtree(target_dir)
+            
+        # Get the repository URL
+        repo_url = f"https://oauth2:{token}@gitlab.com/{project_id}.git"
+        
+        # Clone the specific branch
+        cmd = [
+            "git", "clone",
+            "--branch", branch,
+            "--single-branch",
+            "--depth", "1",
+            repo_url,
+            target_dir
+        ]
+        
+        print(colored(f"Cloning {branch} branch to {target_dir}...", "cyan"))
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if result.returncode != 0:
+            print(colored(f"Error cloning repository: {result.stderr}", "red"))
+            return None
+            
+        return target_dir
+        
+    except Exception as e:
+        print(colored(f"Error in clone_repo: {str(e)}", "red"))
+        return None
 
 def get_file_content_from_ref(repo_path: str, ref: str, file_path: str) -> str:
     if not ref: return ""
@@ -559,47 +598,68 @@ def update_projects_cache(config_file: str, gitlab_url: str, token: str):
     print(colored("Project cache updated successfully!", "green"))
 
 def run_sync_operation(args: argparse.Namespace, token: str):
-    config = configparser.ConfigParser()
-    config.read(args.config_file)
-    gitlab_url = config.get('gitlab', 'url', fallback='https://gitlab.com')
-    ignore_keys = config.get('ignore', 'keys', fallback='').split()
-    csv_strategy = config.get('defaults', 'csv_strategy', fallback='union')
-    
-    # Get target project info
-    target_info = get_project_info(gitlab_url, args.target_project_id, token)
-    if not target_info:
-        print(colored(f"Error: Could not find target project {args.target_project_id}", "red"))
-        sys.exit(1)
-    
-    # Check if this is a temporary branch for same-branch sync
-    is_temp_branch_sync = hasattr(args, 'original_target_branch')
-    target_branch = getattr(args, 'original_target_branch', args.target_branch)
-    
-    tmpdir = tempfile.mkdtemp(prefix="config-sync-")
-    try:
-        print(f"Cloning target repo {target_info['path_with_namespace']}...")
+    """Run the sync operation between source and target branches."""
+    # Create separate temp directories for source and target
+    with tempfile.TemporaryDirectory(prefix="src_") as src_tmpdir, \
+         tempfile.TemporaryDirectory(prefix="tgt_") as tgt_tmpdir:
         
-        # Clone the target branch (or source branch for temp branch sync)
-        clone_branch = target_branch if not is_temp_branch_sync else args.source_branch
-        clone_repo(target_info["http_url_to_repo"], token, clone_branch, tmpdir)
+        print(colored("\n=== Starting Sync Operation ===", "cyan"))
+        print(f"Source branch: {args.source_branch}")
+        print(f"Target branch: {args.target_branch}")
+        print(f"Source file: {args.source_env}")
         
-        # Set up source and target references
-        target_ref = f"origin/{target_branch}"
-        is_same_repo = args.source_project_id == args.target_project_id
+        # Get config
+        config = configparser.ConfigParser()
+        config.read(args.config_file)
+        gitlab_url = config.get('gitlab', 'url', fallback='https://gitlab.com')
+        ignore_keys = config.get('ignore', 'keys', fallback='').split()
+        csv_strategy = config.get('defaults', 'csv_strategy', fallback='union')
         
-        if not is_same_repo:
-            source_info = get_project_info(gitlab_url, args.source_project_id, token)
-            print(f"Adding source remote for {source_info['path_with_namespace']}...")
-            subprocess.run(["git", "remote", "add", "source", source_info["http_url_to_repo"]], 
-                         cwd=tmpdir, check=True, capture_output=True, text=True)
-            subprocess.run(["git", "fetch", "source", args.source_branch], 
-                         cwd=tmpdir, check=True, capture_output=True, text=True)
-            source_ref = args.source_commit or f"source/{args.source_branch}"
-        else:
-            if not args.source_commit: 
-                subprocess.run(["git", "fetch", "origin", args.source_branch], 
-                             cwd=tmpdir, check=True, capture_output=True, text=True)
-            source_ref = args.source_commit or f"origin/{args.source_branch}"
+        # Clone source branch
+        print(colored("\n=== Cloning Source Repository ===", "cyan"))
+        src_repo_path = clone_repo(args.source_project_id, token, args.source_branch, src_tmpdir)
+        if not src_repo_path:
+            print(colored("Failed to clone source repository", "red"))
+            return
+            
+        # Clone target branch
+        print(colored("\n=== Cloning Target Repository ===", "cyan"))
+        tgt_repo_path = clone_repo(args.target_project_id, token, args.target_branch, tgt_tmpdir)
+        if not tgt_repo_path:
+            print(colored("Failed to clone target repository", "red"))
+            return
+            
+        # Verify source file exists
+        src_file = os.path.join(src_repo_path, args.source_env)
+        if not os.path.exists(src_file):
+            print(colored(f"Error: Source file '{args.source_env}' not found in branch '{args.source_branch}'", "red"))
+            print(f"Files in source repo: {os.listdir(src_repo_path)}")
+            return
+            
+        # Get source content
+        with open(src_file, 'r') as f:
+            src_content = f.read()
+            
+        # Get target file path
+        tgt_file = os.path.join(tgt_repo_path, args.target_envs[0])
+        
+        # If target file doesn't exist, create it
+        if not os.path.exists(tgt_file):
+            os.makedirs(os.path.dirname(tgt_file), exist_ok=True)
+            with open(tgt_file, 'w') as f:
+                f.write("")
+            print(colored(f"Created new target file: {args.target_envs[0]}", "yellow"))
+            
+        # Get target content
+        with open(tgt_file, 'r') as f:
+            tgt_content = f.read()
+            
+        # Parse INI files
+        src_config = parse_ini_from_string(src_content)
+        tgt_config = parse_ini_from_string(tgt_content)
+        
+        # Perform the merge
+        print(colored("\n=== Performing Merge ===", "cyan"))
         
         # For same-branch sync with temp branch, we need to create the target branch
         if is_temp_branch_sync and not args.dry_run:
