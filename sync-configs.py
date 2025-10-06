@@ -347,14 +347,33 @@ def clone_repo(project_id: str, token: str, branch: str, target_dir: str, gitlab
                 # If it's just a project ID (number), we need to get the full path first
                 try:
                     import urllib.parse
+                    import requests
+                    
+                    headers = {
+                        'PRIVATE-TOKEN': token,
+                        'Content-Type': 'application/json'
+                    }
                     api_url = f"{base_url}/api/v4/projects/{urllib.parse.quote(project_id, safe='')}"
-                    project_info = get_gitlab_api_paged(api_url, token, {})
-                    if project_info and 'path_with_namespace' in project_info[0]:
-                        project_path = project_info[0]['path_with_namespace']
+                    
+                    # Make a direct request to the GitLab API
+                    response = requests.get(api_url, headers=headers)
+                    response.raise_for_status()
+                    project_info = response.json()
+                    
+                    # Debug output
+                    print(colored(f"\nDebug - Project Info API Response:", "cyan"))
+                    print(project_info)
+                    
+                    if isinstance(project_info, dict) and 'path_with_namespace' in project_info:
+                        project_path = project_info['path_with_namespace']
+                        print(colored(f"Using repository path: {project_path}", "green"))
                     else:
+                        print(colored(f"Unexpected API response format. Falling back to project_id.", "yellow"))
                         project_path = project_id
+                        
                 except Exception as e:
-                    print(colored(f"Error getting project info: {e}", "yellow"))
+                    print(colored(f"Error getting project info: {e}", "red"))
+                    print(colored(f"Falling back to using project_id as path", "yellow"))
                     project_path = project_id
             else:
                 project_path = project_id
@@ -854,8 +873,6 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
     if not tgt_branches:
         print(colored(f"Error: No branches found for target project {tgt_proj_name}", "red"))
         sys.exit(1)
-        
-    args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
     
     # Handle branch selection based on project selection
     if src_proj_name == tgt_proj_name:
@@ -866,6 +883,11 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
             "Select TARGET branch (select same branch to create a temporary branch):",
             tgt_branches + ["[Create new temporary branch]"]
         )
+    else:
+        # For different projects, just select the target branch
+        branch_choice = select_from_list("Select TARGET branch:", tgt_branches)
+        
+    args.target_branch = branch_choice
         
         if branch_choice == "[Create new temporary branch]":
             # Generate a timestamp in milliseconds
