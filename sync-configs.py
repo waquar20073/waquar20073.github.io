@@ -520,46 +520,53 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     changes = []
     deletions = []
     merged_config = configparser.ConfigParser(interpolation=None)
+    
+    # Initialize with empty sections if they don't exist
+    for section in ['DEFAULT']:
+        if not merged_config.has_section(section):
+            merged_config.add_section(section)
+    
     merged_config.optionxform = str
-    merged_config.read_dict(target_config)
     
-    if 'DEFAULT' not in merged_config:
-        merged_config.add_section('DEFAULT')
+    # Safely get source and target sections
+    src = dict(source_config['DEFAULT']) if source_config.has_section('DEFAULT') else {}
+    tgt = dict(target_config['DEFAULT']) if target_config.has_section('DEFAULT') else {}
     
-    # Handle updates and new keys from source
-    if 'DEFAULT' in source_config:
-        src = source_config['DEFAULT']
-        for key, src_val in src.items():
-            if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
-                continue
-                
-            tgt_val = merged_config['DEFAULT'].get(key)
-            if src_val == tgt_val:
-                continue
-                
-            is_csv = (src_val and ',' in src_val) or (tgt_val and ',' in tgt_val)
-            final_val = src_val
+    # Copy target config to merged config first
+    merged_config.read_dict({'DEFAULT': tgt})
+    
+    # Process updates and new keys from source
+    for key, src_val in src.items():
+        if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
+            continue
             
-            if is_csv and csv_strategy == 'union':
-                src_list = {s.strip() for s in (src_val or '').split(',') if s.strip()}
-                tgt_list = {s.strip() for s in (tgt_val or '').split(',') if s.strip()}
-                final_val = ",".join(sorted(list(tgt_list | src_list)))
+        tgt_val = tgt.get(key, '')
+        if src_val == tgt_val:
+            continue
             
-            if final_val != tgt_val:
-                merged_config.set('DEFAULT', key, final_val)
-                changes.append(f"Update key '{key}': '{tgt_val}' -> '{final_val}'")
+        is_csv = (src_val and ',' in src_val) or (tgt_val and ',' in tgt_val)
+        final_val = src_val
+        
+        if is_csv and csv_strategy == 'union':
+            src_list = {s.strip() for s in (src_val or '').split(',') if s.strip()}
+            tgt_list = {s.strip() for s in (tgt_val or '').split(',') if s.strip()}
+            final_val = ",".join(sorted(list(tgt_list | src_list)))
+        
+        if final_val != tgt_val:
+            merged_config.set('DEFAULT', key, final_val)
+            changes.append(f"Update key '{key}': '{tgt_val}' -> '{final_val}'")
     
     # Find keys in target that are not in source (potential deletions)
-    if 'DEFAULT' in target_config:
-        tgt = target_config['DEFAULT']
-        src = source_config.get('DEFAULT', {}) if 'DEFAULT' in source_config else {}
-        
-        for key in list(tgt.keys()):
-            if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
-                continue
-                
-            if key not in src:
-                deletions.append(f"Remove key '{key}': '{tgt[key]}'")
+    for key in list(tgt.keys()):  # Create a list of keys to avoid modifying dict during iteration
+        if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
+            continue
+            
+        if key not in src:
+            deletions.append(f"Remove key '{key}': '{tgt[key]}'")
+            
+            # Remove the key from merged config if it exists
+            if merged_config.has_section('DEFAULT') and merged_config.has_option('DEFAULT', key):
+                merged_config.remove_option('DEFAULT', key)
     
     # If there are deletions, ask for confirmation
     if deletions:
@@ -571,13 +578,14 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
         if confirm == 'y':
             for d in deletions:
                 # Extract key from deletion message more reliably
-                key_match = re.search(r"Remove key '([^']+)'")
+                key_match = re.search(r"Remove key '([^']+)'", d)
                 if not key_match:
                     print(colored(f"Warning: Could not parse key from deletion message: {d}", "yellow"))
                     continue
                 key = key_match.group(1)
-                del merged_config['DEFAULT'][key]
-                changes.append(d)
+                if merged_config.has_section('DEFAULT') and merged_config.has_option('DEFAULT', key):
+                    merged_config.remove_option('DEFAULT', key)
+                    changes.append(d)
         else:
             print(colored("Skipping deletions as requested.", "yellow"))
     
