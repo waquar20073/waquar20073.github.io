@@ -198,18 +198,108 @@ def unified_diff_str(a: str, b: str, fromfile: str, tofile: str) -> str:
         tofile=tofile
     ))
 
-def write_ini_file(file_path: str, config: configparser.ConfigParser):
+def write_ini_file(file_path: str, content: str):
     """Write INI file with consistent formatting."""
-    with open(file_path, 'w') as f:
-        # Custom writer to remove spaces around = and after commas
-        for section in config.sections():
-            f.write(f"[{section}]\n")
-            for key, value in config[section].items():
-                # Remove spaces after commas in list values
-                if ',' in value:
-                    value = ','.join([v.strip() for v in value.split(',')])
-                f.write(f"{key}={value}\n")
-            f.write("\n")
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+def parse_ini_content(content: str) -> dict:
+    """Parse INI content into a dictionary structure.
+    
+    Args:
+        content: The INI content as a string
+        
+    Returns:
+        A dictionary representing the INI structure with sections and key-value pairs
+    """
+    result = {}
+    current_section = 'DEFAULT'
+    result[current_section] = {}
+    
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith(';') or line.startswith('#'):
+            continue
+            
+        # Handle section headers
+        if line.startswith('[') and line.endswith(']'):
+            current_section = line[1:-1].strip()
+            if current_section not in result:
+                result[current_section] = {}
+            continue
+            
+        # Handle key-value pairs
+        if '=' in line:
+            key, value = line.split('=', 1)
+            key = key.strip()
+            value = value.strip()
+            result[current_section][key] = value
+            
+    return result
+
+def update_ini_content(original_content: str, updates: dict) -> str:
+    """Update INI content with new values while preserving comments and formatting.
+    
+    Args:
+        original_content: The original INI content
+        updates: Dictionary of updates in the format {'section': {'key': 'value'}}
+        
+    Returns:
+        Updated INI content as a string
+    """
+    lines = original_content.splitlines()
+    result = []
+    current_section = 'DEFAULT'
+    
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        stripped = line.strip()
+        
+        # Preserve empty lines and comments
+        if not stripped or stripped.startswith(';') or stripped.startswith('#'):
+            result.append(line)
+            i += 1
+            continue
+            
+        # Handle section headers
+        if stripped.startswith('[') and ']' in stripped:
+            section_end = stripped.find(']')
+            current_section = stripped[1:section_end].strip()
+            result.append(line)
+            i += 1
+            continue
+            
+        # Handle key-value pairs
+        if '=' in stripped:
+            key = stripped.split('=', 1)[0].strip()
+            
+            # Check if this key should be updated
+            if (current_section in updates and key in updates[current_section]) or \
+               (current_section not in updates and 'DEFAULT' in updates and key in updates['DEFAULT']):
+                # Use the new value
+                new_value = updates.get(current_section, updates.get('DEFAULT', {})).get(key, '')
+                result.append(f"{key}={new_value}")
+                # Skip any continuation lines for this key
+                while i + 1 < len(lines) and lines[i + 1].startswith((' ', '\t')):
+                    i += 1
+            else:
+                # Keep the original line
+                result.append(line)
+        else:
+            # Keep lines that aren't key-value pairs
+            result.append(line)
+            
+        i += 1
+    
+    # Add any new sections/keys that didn't exist before
+    for section, items in updates.items():
+        if section not in [s for s in result if s.startswith('[') and s.endswith(']')]:
+            result.append(f"\n[{section}]")
+            for key, value in items.items():
+                result.append(f"{key}={value}")
+    
+    return '\n'.join(result)
 
 def select_from_list(prompt: str, options: List[Any]) -> Any:
     """Display a numbered menu and get user's selection.
