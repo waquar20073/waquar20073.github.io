@@ -34,123 +34,78 @@ class Colors:
     BLUE = '\033[94m'
     CYAN = '\033[96m'
     RESET = '\033[0m'
-    
 # Alias for backward compatibility
 Fore = Colors
 Style = type('Style', (), {'RESET_ALL': Colors.RESET})
 
 
-def config_to_string(config: configparser.ConfigParser) -> str:
-    """Convert a ConfigParser object to a properly formatted INI string.
+def config_to_string(config: dict) -> str:
+    """Convert a dictionary to a properly formatted INI string.
     
     Args:
-        config: The ConfigParser instance to convert
+        config: Dictionary with section names as keys and dicts of key-value pairs as values
         
     Returns:
         str: The formatted INI content as a string
     """
     output = []
-    for section in config.sections():
-        output.append(f"[{section}]")
-        for key, value in config[section].items():
-            output.append(f"{key}={value}")
-        output.append("")  # Add empty line between sections
-    return "\n".join(output)
+    for section, items in config.items():
+        if section != 'DEFAULT' or items:  # Skip empty DEFAULT section
+            if section != 'DEFAULT':
+                output.append(f"[{section}]")
+            for key, value in items.items():
+                output.append(f"{key}={value}")
+            output.append("")  # Add empty line between sections
+    return "\n".join(output).strip()
     
-def parse_ini_from_string(content: str) -> configparser.ConfigParser:
-    """Parse INI content from a string.
+def parse_ini_from_string(content: str) -> dict:
+    """Parse INI content from a string into a dictionary structure.
     
     Args:
         content: The INI content as a string
         
     Returns:
-        A ConfigParser instance with the parsed content
+        A dictionary representing the INI structure with sections and key-value pairs
     """
-    # Create a new config parser with specific settings
-    config = configparser.ConfigParser(
-        interpolation=None,
-        empty_lines_in_values=True,
-        allow_no_value=True,
-        strict=False
-    )
-    config.optionxform = str  # Preserve case sensitivity
+    result = {}
+    current_section = 'DEFAULT'
+    result[current_section] = {}
     
-    # Pre-process the content to ensure it has a section header
-    lines = content.splitlines()
-    has_section = any(line.strip().startswith('[') and line.strip().endswith(']') for line in lines)
-    
-    # If no section header found, add DEFAULT section
-    if not has_section:
-        content = '[DEFAULT]\n' + content
-    
-    # Try to parse the content
-    try:
-        config.read_string(content)
-    except configparser.MissingSectionHeaderError:
-        # If still fails, try with a different approach
-        config = configparser.ConfigParser(
-            interpolation=None,
-            empty_lines_in_values=True,
-            allow_no_value=True,
-            strict=False
-        )
-        config.optionxform = str
-        config.read_string('[DEFAULT]\n' + content)
-    
-    # If still no sections, try manual parsing
-    if not config.sections():
-        config = configparser.ConfigParser(
-            interpolation=None,
-            empty_lines_in_values=True,
-            allow_no_value=True,
-            strict=False
-        )
-        config.optionxform = str
-        
-        # Add DEFAULT section
-        if not config.has_section('DEFAULT'):
-            config.add_section('DEFAULT')
-        
-        # Parse content manually
-        current_section = 'DEFAULT'
-        for line in content.splitlines():
-            line = line.strip()
-            if not line:
-                continue
-                
-            # Handle section headers
-            if line.startswith('[') and line.endswith(']'):
-                current_section = line[1:-1].strip()
-                if not config.has_section(current_section):
-                    config.add_section(current_section)
-                continue
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or line.startswith(';') or line.startswith('#'):
+            continue
             
-            # Handle key-value pairs
-            if '=' in line:
-                key, value = line.split('=', 1)
-                key = key.strip()
-                value = value.strip()
-                
-                if not config.has_section(current_section):
-                    config.add_section(current_section)
-                config.set(current_section, key, value)
+        # Handle section headers
+        if line.startswith('[') and line.endswith(']'):
+            current_section = line[1:-1].strip()
+            if current_section not in result:
+                result[current_section] = {}
+            continue
+            
+        # Handle key-value pairs
+        if '=' in line:
+            key, value = line.split('=', 1)
+            key = key.strip()
+            value = value.strip()
+            result[current_section][key] = value
     
     # Debug output
     print("\n" + "="*50)
     print("DEBUG: Parsed INI content")
     print(f"Content length: {len(content)} characters")
-    print(f"Sections found: {config.sections()}")
+    print(f"Sections found: {list(result.keys())}")
     
-    for section in config.sections():
+    for section, items in result.items():
         print(f"\nSection: [{section}]")
-        for key, value in config.items(section):
+        for key, value in items.items():
             print(f"  {key} = {value[:50]}{'...' if len(str(value)) > 50 else ''}")
     
-    if not config.sections():
-        print("\nWARNING: No sections found in INI content!")
+    if not result:
+        print("\nWARNING: No valid INI content found!")
         print("Raw content preview:", content[:200] + ("..." if len(content) > 200 else ""))
     
-    return config
+    return result
 
 # ------------------------------------------------------------------------------
 # SECTION 1: Core Utilities & Helpers
@@ -776,37 +731,36 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
 
 def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_keys, csv_strategy):
     changes, conflicts = [], []
-    merged_config = configparser.ConfigParser(interpolation=None)
-    merged_config.optionxform = str
-    
-    # Ensure DEFAULT section exists
-    if not merged_config.has_section('DEFAULT'):
-        merged_config.add_section('DEFAULT')
-    
-    # Helper to safely get a section as a dictionary
-    def get_section_dict(parser, section_name):
-        if not parser.has_section(section_name):
-            return {}
-        return {k: v for k, v in parser.items(section_name)}
+    merged_config = {'DEFAULT': {}}
     
     # Get all sections as dictionaries
-    anc = get_section_dict(ancestor_config, 'DEFAULT')
-    src = get_section_dict(source_config, 'DEFAULT')
-    tgt = get_section_dict(target_config, 'DEFAULT')
+    anc = ancestor_config.get('DEFAULT', {})
+    src = source_config.get('DEFAULT', {})
+    tgt = target_config.get('DEFAULT', {})
     
     # Copy target config to merged config
-    if tgt:
-        for key, value in tgt.items():
-            merged_config.set('DEFAULT', key, value)
+    merged_config['DEFAULT'].update(tgt)
     
-    all_keys: Set[str] = set(anc.keys()) | set(src.keys()) | set(tgt.keys())
+    all_keys = set(anc.keys()) | set(src.keys()) | set(tgt.keys())
     for key in sorted(list(all_keys)):
-        if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys): continue
-        anc_val, src_val, tgt_val = anc.get(key), src.get(key), tgt.get(key)
-        src_changed, tgt_changed = src_val != anc_val, tgt_val != anc_val
+        if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
+            continue
+            
+        anc_val = anc.get(key)
+        src_val = src.get(key)
+        tgt_val = tgt.get(key)
+        
+        src_changed = src_val != anc_val
+        tgt_changed = tgt_val != anc_val
+        
+        # Check for conflicts
         if src_changed and tgt_changed and src_val != tgt_val:
-            conflicts.append(f"Conflict on key '{key}': source='{src_val}', target='{tgt_val}'"); continue
-        final_val, changed = tgt_val, False
+            conflicts.append(f"Conflict on key '{key}': source='{src_val}', target='{tgt_val}'")
+            continue
+            
+        final_val = tgt_val
+        changed = False
+        
         if src_changed and src_val != tgt_val:
             is_csv = (src_val and ',' in src_val) or (tgt_val and ',' in tgt_val)
             if is_csv and csv_strategy == 'union':
@@ -816,14 +770,23 @@ def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_ke
                 final_val = ",".join(sorted(list(tgt_list | (src_list - anc_list))))
                 changed = final_val != tgt_val
             else:
-                final_val, changed = src_val, True
+                final_val = src_val
+                changed = True
+                
+        # Handle key removal
         if src_val is None and anc_val is not None and not tgt_changed:
-            if key in merged_config['DEFAULT']: del merged_config['DEFAULT'][key]; changes.append(f"Removed key '{key}'")
+            if key in merged_config['DEFAULT']:
+                del merged_config['DEFAULT'][key]
+                changes.append(f"Removed key '{key}'")
             continue
+            
+        # Apply changes
         if changed:
-            merged_config.set('DEFAULT', key, str(final_val)); changes.append(f"Updated key '{key}': '{tgt_val}' -> '{final_val}'")
+            merged_config['DEFAULT'][key] = str(final_val)
+            changes.append(f"Updated key '{key}': '{tgt_val}' -> '{final_val}'")
         elif final_val is not None and key not in merged_config['DEFAULT']:
-             merged_config.set('DEFAULT', key, str(final_val)); changes.append(f"Added key '{key}': '{final_val}'")
+            merged_config['DEFAULT'][key] = str(final_val)
+            changes.append(f"Added key '{key}': '{final_val}'")
     return merged_config, changes, conflicts
 
 # ------------------------------------------------------------------------------
@@ -832,23 +795,38 @@ def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_ke
 
 def update_projects_cache(config_file: str, gitlab_url: str, token: str):
     print("Updating project cache from GitLab...")
-    config = configparser.ConfigParser(interpolation=None); config.optionxform = str
-    config.read(config_file)
-    if not config.has_section('gitlab'):
+    
+    # Read config file as text
+    with open(config_file, 'r', encoding='utf-8') as f:
+        config_content = f.read()
+    
+    # Parse config as dictionary
+    config = parse_ini_content(config_content)
+    
+    if 'gitlab' not in config:
         print(colored("ERROR: [gitlab] section not in config!", "red"))
         sys.exit(1)
+        
+    gitlab_config = config.get('gitlab', {})
+    
     for env in ['prod', 'non_prod']:
-        group_id = config.get('gitlab', f'{env}_group_id', fallback=None)
-        if not group_id: continue
+        group_id = gitlab_config.get(f'{env}_group_id')
+        if not group_id:
+            continue
+            
         section = f'projects_{env}'
         print(f"Fetching projects for '{env}' group ({group_id})...")
         projects = get_group_projects(gitlab_url, group_id, token)
-        if config.has_section(section): config.remove_section(section)
-        config.add_section(section)
+        
+        # Update the projects section
+        config[section] = {}
         for proj in sorted(projects, key=lambda p: p['name_with_namespace']):
-            config.set(section, proj['name_with_namespace'], str(proj['id']))
-    with open(config_file, 'w') as f:
-        config.write(f)
+            config[section][proj['name_with_namespace']] = str(proj['id'])
+    
+    # Write the updated config back to file
+    with open(config_file, 'w', encoding='utf-8') as f:
+        f.write(config_to_string(config))
+    
     print(colored("Project cache updated successfully!", "green"))
 
 def run_sync_operation(args: argparse.Namespace, token: str):
