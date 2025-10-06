@@ -66,52 +66,81 @@ def parse_ini_from_string(content: str) -> configparser.ConfigParser:
     Returns:
         A ConfigParser instance with the parsed content
     """
-    # Create config with empty defaults
+    # Create config with DEFAULT section and empty lines in values allowed
     config = configparser.ConfigParser(
         interpolation=None,
-        empty_lines_in_values=False,
-        allow_no_value=True
+        empty_lines_in_values=True,
+        allow_no_value=True,
+        delimiters=('=',),
+        strict=False
     )
     config.optionxform = str  # Preserve case sensitivity
     
-    # Clean up the content
+    # Pre-process content to handle multi-line values and special cases
     lines = []
-    current_section = 'DEFAULT'
+    current_section = 'main'  # Use a different section name to avoid DEFAULT issues
+    in_multiline = False
+    current_key = None
+    current_value = []
     
     for line in content.splitlines():
         line = line.rstrip()
-        if not line.strip():
+        
+        # Skip empty lines unless we're in a multi-line value
+        if not line.strip() and not in_multiline:
             continue
             
         # Handle section headers
         if line.strip().startswith('[') and line.strip().endswith(']'):
+            # Save any pending value
+            if current_key is not None and current_value:
+                if not config.has_section(current_section):
+                    config.add_section(current_section)
+                config.set(current_section, current_key, '\n'.join(current_value).strip())
+                current_key = None
+                current_value = []
+                
             current_section = line.strip()[1:-1].strip()
-            if not config.has_section(current_section):
-                config.add_section(current_section)
+            in_multiline = False
             continue
             
         # Handle key-value pairs
-        if '=' in line:
-            key, value = line.split('=', 1)
-            key = key.strip()
-            value = value.strip()
-            
-            if not config.has_section(current_section):
-                config.add_section(current_section)
+        if '=' in line and not in_multiline:
+            # Save any pending value
+            if current_key is not None and current_value:
+                if not config.has_section(current_section):
+                    config.add_section(current_section)
+                config.set(current_section, current_key, '\n'.join(current_value).strip())
                 
-            config.set(current_section, key, value)
+            key, value = line.split('=', 1)
+            current_key = key.strip()
+            current_value = [value.strip()]
+            in_multiline = True
+        elif in_multiline and current_key is not None:
+            # Continue a multi-line value
+            current_value.append(line)
     
-    # Ensure DEFAULT section exists
-    if not config.has_section('DEFAULT'):
-        config.add_section('DEFAULT')
+    # Save the last value if any
+    if current_key is not None and current_value:
+        if not config.has_section(current_section):
+            config.add_section(current_section)
+        config.set(current_section, current_key, '\n'.join(current_value).strip())
+    
+    # If we only have the 'main' section, rename it to 'DEFAULT'
+    if set(config.sections()) == {'main'} and config.has_section('main'):
+        if not config.has_section('DEFAULT'):
+            config.add_section('DEFAULT')
+        for key, value in config.items('main'):
+            config.set('DEFAULT', key, value)
+        config.remove_section('main')
     
     # Debug output
     print("\n" + "="*50)
     print("DEBUG: Parsed INI content")
     print(f"Sections found: {config.sections()}")
-    if config.has_section('DEFAULT'):
-        print(f"DEFAULT section items: {len(config.items('DEFAULT'))} items")
-        for key, value in config.items('DEFAULT'):
+    for section in config.sections():
+        print(f"\nSection: [{section}]")
+        for key, value in config.items(section):
             print(f"  {key} = {value[:50]}{'...' if len(str(value)) > 50 else ''}")
     
     return config
