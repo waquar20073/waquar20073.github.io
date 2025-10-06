@@ -933,8 +933,8 @@ def run_sync_operation(args: argparse.Namespace, token: str):
             return
         
         # Write merged config back to target file
-        with open(tgt_file, 'w') as f:
-            merged_config.write(f)
+        with open(tgt_file, 'w', encoding='utf-8') as f:
+            f.write(config_to_string(merged_config))
             
         print(colored("\n=== Merge Successful ===", "green"))
         if changes:
