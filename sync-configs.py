@@ -66,9 +66,54 @@ def parse_ini_from_string(content: str) -> configparser.ConfigParser:
     Returns:
         A ConfigParser instance with the parsed content
     """
-    config = configparser.ConfigParser(interpolation=None)
-    config.optionxform = str
-    config.read_string(content)
+    # Create config with empty defaults
+    config = configparser.ConfigParser(
+        interpolation=None,
+        empty_lines_in_values=False,
+        allow_no_value=True
+    )
+    config.optionxform = str  # Preserve case sensitivity
+    
+    # Clean up the content
+    lines = []
+    current_section = 'DEFAULT'
+    
+    for line in content.splitlines():
+        line = line.rstrip()
+        if not line.strip():
+            continue
+            
+        # Handle section headers
+        if line.strip().startswith('[') and line.strip().endswith(']'):
+            current_section = line.strip()[1:-1].strip()
+            if not config.has_section(current_section):
+                config.add_section(current_section)
+            continue
+            
+        # Handle key-value pairs
+        if '=' in line:
+            key, value = line.split('=', 1)
+            key = key.strip()
+            value = value.strip()
+            
+            if not config.has_section(current_section):
+                config.add_section(current_section)
+                
+            config.set(current_section, key, value)
+    
+    # Ensure DEFAULT section exists
+    if not config.has_section('DEFAULT'):
+        config.add_section('DEFAULT')
+    
+    # Debug output
+    print("\n" + "="*50)
+    print("DEBUG: Parsed INI content")
+    print(f"Sections found: {config.sections()}")
+    if config.has_section('DEFAULT'):
+        print(f"DEFAULT section items: {len(config.items('DEFAULT'))} items")
+        for key, value in config.items('DEFAULT'):
+            print(f"  {key} = {value[:50]}{'...' if len(str(value)) > 50 else ''}")
+    
     return config
 
 # ------------------------------------------------------------------------------
