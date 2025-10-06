@@ -627,6 +627,11 @@ def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch
     print(colored(f"API URL: {api_url}", "cyan"))
     
     try:
+        print(colored("\n=== MR Creation Details ===", "cyan"))
+        print(colored(f"API URL: {api_url}", "cyan"))
+        print(colored(f"Headers: {json.dumps(headers, indent=2)}", "cyan"))
+        print(colored(f"Payload: {json.dumps(payload, indent=2)}", "cyan"))
+        
         response = requests.post(
             api_url, 
             headers=headers, 
@@ -635,25 +640,47 @@ def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch
         )
         
         # Print response for debugging
-        print(colored(f"MR creation response status: {response.status_code}", "cyan"))
+        print(colored(f"\n=== MR Creation Response ===", "cyan"))
+        print(colored(f"Status Code: {response.status_code}", "cyan"))
         if response.text:
-            print(colored(f"Response: {response.text}", "cyan"))
-            
+            try:
+                print(colored(f"Response JSON: {json.dumps(response.json(), indent=2)}", "cyan"))
+            except:
+                print(colored(f"Response Text: {response.text}", "cyan"))
+        
         response.raise_for_status()
         
-        mr_url = response.json().get('web_url', 'URL not available')
-        print(colored(f"✓ Successfully created merge request: {mr_url}", "green"))
+        mr_data = response.json()
+        mr_url = mr_data.get('web_url', 'URL not available')
+        mr_iid = mr_data.get('iid', 'N/A')
+        print(colored(f"\n✓ Successfully created merge request!", "green"))
+        print(colored(f"MR IID: {mr_iid}", "green"))
+        print(colored(f"MR URL: {mr_url}", "green"))
         return True
         
     except requests.exceptions.RequestException as e:
-        error_msg = f"Failed to create merge request: {str(e)}"
+        print(colored("\n!!! MR Creation Failed !!!", "red"))
+        error_msg = [f"Error: {str(e)}"]
+        
         if hasattr(e, 'response') and e.response is not None:
-            error_msg += f"\nStatus code: {e.response.status_code}"
+            error_msg.append(f"Status Code: {e.response.status_code}")
             try:
-                error_msg += f"\nResponse: {e.response.text}"
+                error_msg.append(f"Response: {e.response.text}")
+                if e.response.status_code == 400:
+                    error_msg.append("Possible issues:")
+                    error_msg.append("- Source and target branches are the same")
+                    error_msg.append("- Merge request already exists")
+                    error_msg.append("- Invalid project ID or insufficient permissions")
             except:
                 pass
-        print(colored(error_msg, "red"))
+                
+        error_msg.append("\nPlease check:")
+        error_msg.append(f"1. The project ID is correct: {project_id}")
+        error_msg.append(f"2. The source branch exists: {source_branch}")
+        error_msg.append(f"3. The target branch exists: {target_branch}")
+        error_msg.append("4. Your GitLab token has sufficient permissions")
+        
+        print(colored("\n".join(error_msg), "red"))
         return False
 
 # ------------------------------------------------------------------------------
@@ -685,9 +712,14 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     
     # Process updates and new keys from source
     for key, src_val in src.items():
-        # Skip ignored keys
-        if ignore_keys and any(fnmatch.fnmatchcase(key, p) for p in ignore_keys):
-            print(f"DEBUG: Skipping ignored key: {key}")
+        # Skip ignored keys - exact match or pattern match
+        key_ignored = False
+        for pattern in ignore_keys:
+            if key == pattern or fnmatch.fnmatchcase(key, pattern):
+                print(f"DEBUG: Skipping ignored key (exact/pattern match): {key} matches {pattern}")
+                key_ignored = True
+                break
+        if key_ignored:
             continue
             
         tgt_val = tgt.get(key, '')
@@ -899,9 +931,15 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         
         # Handle ignore keys - split by comma or whitespace and strip whitespace
         ignore_keys_str = config.get('ignore', {}).get('keys', '')
-        ignore_keys = [k.strip() for k in re.split(r'[,\s]+', ignore_keys_str) if k.strip()]
-        print(colored(f"\n=== Ignored Keys ===", "cyan"))
-        print(colored(f"Ignoring keys: {ignore_keys}", "cyan"))
+        # Split by comma first, then by whitespace, and flatten the list
+        ignore_keys = []
+        for part in ignore_keys_str.split(','):
+            ignore_keys.extend(part.split())
+        ignore_keys = [k.strip() for k in ignore_keys if k.strip()]
+        
+        print(colored("\n=== Ignored Keys ===", "cyan"))
+        print(colored(f"Raw ignore string: '{ignore_keys_str}'", "cyan"))
+        print(colored(f"Parsed ignore keys: {ignore_keys}", "cyan"))
         
         csv_strategy = config.get('defaults', {}).get('csv_strategy', 'union')
         
