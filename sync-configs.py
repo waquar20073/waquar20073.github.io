@@ -521,19 +521,27 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     deletions = []
     merged_config = configparser.ConfigParser(interpolation=None)
     
-    # Initialize with empty sections if they don't exist
-    for section in ['DEFAULT']:
-        if not merged_config.has_section(section):
-            merged_config.add_section(section)
+    # Initialize with empty DEFAULT section
+    if not merged_config.has_section('DEFAULT'):
+        merged_config.add_section('DEFAULT')
     
     merged_config.optionxform = str
     
     # Safely get source and target sections
-    src = dict(source_config['DEFAULT']) if source_config.has_section('DEFAULT') else {}
-    tgt = dict(target_config['DEFAULT']) if target_config.has_section('DEFAULT') else {}
+    def get_section_dict(parser, section_name):
+        """Helper to safely get a section as a dictionary."""
+        if not parser.has_section(section_name):
+            return {}
+        return {k: v for k, v in parser.items(section_name)}
+    
+    # Get sections as dictionaries
+    src = get_section_dict(source_config, 'DEFAULT')
+    tgt = get_section_dict(target_config, 'DEFAULT')
     
     # Copy target config to merged config first
-    merged_config.read_dict({'DEFAULT': tgt})
+    if tgt:  # Only if there are items to copy
+        for key, value in tgt.items():
+            merged_config.set('DEFAULT', key, value)
     
     # Process updates and new keys from source
     for key, src_val in src.items():
@@ -593,12 +601,29 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
 
 def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_keys, csv_strategy):
     changes, conflicts = [], []
-    merged_config = configparser.ConfigParser(interpolation=None); merged_config.optionxform = str
-    merged_config.read_dict(target_config)
-    anc = ancestor_config['DEFAULT'] if 'DEFAULT' in ancestor_config else {}
-    src = source_config['DEFAULT'] if 'DEFAULT' in source_config else {}
-    tgt = target_config['DEFAULT'] if 'DEFAULT' in target_config else {}
-    if 'DEFAULT' not in merged_config: merged_config.add_section('DEFAULT')
+    merged_config = configparser.ConfigParser(interpolation=None)
+    merged_config.optionxform = str
+    
+    # Ensure DEFAULT section exists
+    if not merged_config.has_section('DEFAULT'):
+        merged_config.add_section('DEFAULT')
+    
+    # Helper to safely get a section as a dictionary
+    def get_section_dict(parser, section_name):
+        if not parser.has_section(section_name):
+            return {}
+        return {k: v for k, v in parser.items(section_name)}
+    
+    # Get all sections as dictionaries
+    anc = get_section_dict(ancestor_config, 'DEFAULT')
+    src = get_section_dict(source_config, 'DEFAULT')
+    tgt = get_section_dict(target_config, 'DEFAULT')
+    
+    # Copy target config to merged config
+    if tgt:
+        for key, value in tgt.items():
+            merged_config.set('DEFAULT', key, value)
+    
     all_keys: Set[str] = set(anc.keys()) | set(src.keys()) | set(tgt.keys())
     for key in sorted(list(all_keys)):
         if any(fnmatch.fnmatchcase(key, p) for p in ignore_keys): continue
