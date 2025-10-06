@@ -754,15 +754,14 @@ def run_sync_operation(args: argparse.Namespace, token: str):
             print(colored(f"\nStdout:\n{e.stdout}", "yellow"))
         if e.stderr:
             print(colored(f"\nStderr:\n{e.stderr}", "red"))
+        print(colored("\nTemporary directories will be automatically cleaned up by the system.", "yellow"))
         sys.exit(1)
     except Exception as e:
         print(colored(f"\nUnexpected error: {str(e)}", "red"))
         import traceback
         traceback.print_exc()
+        print(colored("\nTemporary directories will be automatically cleaned up by the system.", "yellow"))
         sys.exit(1)
-        sys.exit(1)
-    finally:
-        force_rmtree(tmpdir)
 
 def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
     config = configparser.ConfigParser(interpolation=None); config.optionxform = str; config.read(config_file)
