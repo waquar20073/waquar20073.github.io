@@ -600,13 +600,14 @@ def update_projects_cache(config_file: str, gitlab_url: str, token: str):
 def run_sync_operation(args: argparse.Namespace, token: str):
     """Run the sync operation between source and target branches."""
     # Create separate temp directories for source and target
-    with tempfile.TemporaryDirectory(prefix="src_") as src_tmpdir, \
-         tempfile.TemporaryDirectory(prefix="tgt_") as tgt_tmpdir:
-        
-        print(colored("\n=== Starting Sync Operation ===", "cyan"))
-        print(f"Source branch: {args.source_branch}")
-        print(f"Target branch: {args.target_branch}")
-        print(f"Source file: {args.source_env}")
+    try:
+        with tempfile.TemporaryDirectory(prefix="src_") as src_tmpdir, \
+             tempfile.TemporaryDirectory(prefix="tgt_") as tgt_tmpdir:
+            
+            print(colored("\n=== Starting Sync Operation ===", "cyan"))
+            print(f"Source branch: {args.source_branch}")
+            print(f"Target branch: {args.target_branch}")
+            print(f"Source file: {args.source_env}")
         
         # Get config
         config = configparser.ConfigParser()
@@ -661,137 +662,90 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         # Perform the merge
         print(colored("\n=== Performing Merge ===", "cyan"))
         
-        # For same-branch sync with temp branch, we need to create the target branch
-        if is_temp_branch_sync and not args.dry_run:
-            subprocess.run(["git", "checkout", "-b", args.target_branch], 
-                         cwd=tmpdir, check=True, capture_output=True, text=True)
+        # Check if this is a temporary branch for same-branch sync
+        is_temp_branch_sync = hasattr(args, 'original_target_branch')
+        target_branch = getattr(args, 'original_target_branch', args.target_branch)
         
-        # Determine merge base
-        is_same_branch = is_same_repo and args.source_branch == target_branch
-        ancestor = None if is_same_branch else compute_three_way_ancestor(tmpdir, source_ref, target_ref)
+        # Determine if we're doing a two-way or three-way merge
+        is_same_branch = args.source_branch == target_branch
+        ancestor = None if is_same_branch else compute_three_way_ancestor(
+            tgt_repo_path, args.source_branch, target_branch
+        )
+        
         if not is_same_branch and not ancestor:
-            print(colored("Warning: No common ancestor. Using 2-way merge.", "yellow"))
+            print(colored("Warning: No common ancestor found, falling back to two-way merge", "yellow"))
         
-        all_changes, all_conflicts, all_diffs, files_to_commit = [], [], [], []
-        
-        for target_env in args.target_envs:
-            print(colored(f"\n--- Processing {args.source_env} -> {target_env} ---", "blue"))
-            
-            # Get file contents
-            src_content = get_file_content_from_ref(tmpdir, source_ref, args.source_env)
-            tgt_content = get_file_content_from_ref(tmpdir, target_ref, target_env)
-            
-            if not src_content:
-                print(colored(f"Warning: Source file '{args.source_env}' not found. Skipping.", "yellow"))
-                continue
-                
-            # Perform the merge
-            if is_same_branch or not ancestor:
-                merged_cfg, changes = merge_ini_two_way(
-                    parse_ini_from_string(src_content), 
-                    parse_ini_from_string(tgt_content) if tgt_content else configparser.ConfigParser(),
-                    ignore_keys, 
-                    csv_strategy
-                )
-                conflicts = []
-            else:
-                anc_content = get_file_content_from_ref(tmpdir, ancestor, target_env)
-                merged_cfg, changes, conflicts = merge_ini_three_way(
-                    parse_ini_from_string(anc_content) if anc_content else configparser.ConfigParser(),
-                    parse_ini_from_string(src_content),
-                    parse_ini_from_string(tgt_content) if tgt_content else configparser.ConfigParser(),
-                    ignore_keys,
-                    csv_strategy
-                )
-            
-            if conflicts:
-                all_conflicts.extend([f"[{target_env}] {c}" for c in conflicts])
-            if changes:
-                all_changes.extend([f"[{target_env}] {c}" for c in changes])
-            
-            # Write changes if there are any
-            merged_content = config_to_string(merged_cfg)
-            if not tgt_content or tgt_content != merged_content:
-                all_diffs.append(unified_diff_str(
-                    tgt_content if tgt_content else "", 
-                    merged_content, 
-                    fromfile=target_env, 
-                    tofile=target_env
-                ))
-                if not args.dry_run:
-                    file_path = Path(tmpdir) / target_env
-                    file_path.parent.mkdir(parents=True, exist_ok=True)
-                    file_path.write_text(merged_content)
-                    files_to_commit.append(target_env)
-        
-        # Handle conflicts and no-changes cases
-        if all_conflicts:
-            print(colored("\nConflicts detected! Aborting.", "red"))
-            for c in all_conflicts:
-                print(f"  - {c}")
-            sys.exit(1)
-                
-        if not files_to_commit:
-            print(colored("\nNo changes to sync.", "green"))
-            sys.exit(0)
-        
-        # Show diffs
-        print(colored("\nChanges to be committed:", "yellow"))
-        print("\n".join(all_diffs))
-        
-        if args.dry_run:
-            print(colored("\nDRY-RUN: No files written, no MR created.", "yellow"))
-            sys.exit(0)
-        
-        # For temp branch sync, we already created the branch earlier
-        if not is_temp_branch_sync:
-            # Create a new branch for the changes
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            new_branch = f"{args.branch_prefix}-{timestamp}"
-            create_and_push_branch(
-                repo_path=tmpdir,
-                new_branch=new_branch,
-                commit_message=args.commit_message,
-                source_branch=target_branch
+        # Perform the merge
+        if is_same_branch or not ancestor:
+            merged_config, changes = merge_ini_two_way(
+                src_config, tgt_config, ignore_keys, csv_strategy
             )
+            conflicts = []
         else:
-            new_branch = args.target_branch
-            # Add and commit changes
-            subprocess.run(["git", "add", "."], cwd=tmpdir, check=True, capture_output=True, text=True)
-            subprocess.run(
-                ["git", "commit", "-m", args.commit_message], 
-                cwd=tmpdir, 
-                check=True, 
-                capture_output=True, 
-                text=True
+            # Get ancestor content for three-way merge
+            anc_file = os.path.join(src_repo_path, args.source_env)
+            anc_content = ""
+            if os.path.exists(anc_file):
+                with open(anc_file, 'r') as f:
+                    anc_content = f.read()
+            
+            anc_config = parse_ini_from_string(anc_content) if anc_content else configparser.ConfigParser()
+            merged_config, changes, conflicts = merge_ini_three_way(
+                anc_config, src_config, tgt_config, ignore_keys, csv_strategy
             )
-            # Push the new branch
-            subprocess.run(
-                ["git", "push", "-u", "origin", new_branch], 
-                cwd=tmpdir, 
-                check=True, 
-                capture_output=True, 
-                text=True
-            )
-            print(colored(f"\nSuccessfully pushed changes to branch: {new_branch}", "green"))
+        
+        # Handle conflicts
+        if conflicts:
+            print(colored("\n=== Merge Conflicts ===", "red"))
+            for conflict in conflicts:
+                print(colored(f"Conflict: {conflict}", "red"))
+            print(colored("\nPlease resolve conflicts manually", "red"))
+            return
+        
+        # Write merged config back to target file
+        with open(tgt_file, 'w') as f:
+            merged_config.write(f)
+            
+        print(colored("\n=== Merge Successful ===", "green"))
+        if changes:
+            print(colored("Changes:", "cyan"))
+            for change in changes:
+                print(f"- {change}")
+        else:
+            print(colored("No changes were made", "yellow"))
+            return
+            
+        # Create and push branch with changes
+        print(colored("\n=== Creating and Pushing Changes ===", "cyan"))
+        
+        # Change to target repo directory
+        os.chdir(tgt_repo_path)
+        
+        # Create a new branch for the changes
+        new_branch = f"config-sync/{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        print(colored(f"Creating new branch: {new_branch}", "cyan"))
+        
+        subprocess.run(["git", "checkout", "-b", new_branch], check=True)
+        subprocess.run(["git", "add", args.target_envs[0]], check=True)
+        subprocess.run(
+            ["git", "commit", "-m", f"chore: Update {args.target_envs[0]} from {args.source_branch}"],
+            check=True
+        )
+        
+        # Push the new branch
+        print(colored(f"Pushing changes to {new_branch}...", "cyan"))
+        subprocess.run(["git", "push", "-u", "origin", new_branch], check=True)
         
         # Create merge request if needed
-        if is_temp_branch_sync or not is_same_branch:
-            mr_title = f"chore(config): Automated configuration sync from {args.source_env}"
-            mr_desc = (
-                f"Automated sync from `{args.source_project_id}:{args.source_branch}:{args.source_env}` "
-                f"to `{args.target_project_id}:{target_branch}`.\n\n"
-                "**Changes:**\n- " + "\n- ".join(all_changes)
-            )
-            
+        if hasattr(args, 'create_mr') and args.create_mr:
             create_gitlab_mr(
                 gitlab_url=gitlab_url,
                 project_id=args.target_project_id,
                 token=token,
                 source_branch=new_branch,
-                target_branch=target_branch,
-                title=mr_title,
-                description=mr_desc
+                target_branch=args.target_branch,
+                title=f"chore: Update {args.target_envs[0]} from {args.source_branch}",
+                description="Automated configuration sync"
             )
     except subprocess.CalledProcessError as e:
         print(colored(f"\nError executing command:", "red"))
@@ -805,6 +759,7 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         print(colored(f"\nUnexpected error: {str(e)}", "red"))
         import traceback
         traceback.print_exc()
+        sys.exit(1)
         sys.exit(1)
     finally:
         force_rmtree(tmpdir)
