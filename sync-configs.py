@@ -319,7 +319,7 @@ def get_repo_ini_files(repo_url: str, branch: str, token: str) -> List[str]:
                     ini_files.append(rel_path)
         return ini_files
 
-def clone_repo(project_id: str, token: str, branch: str, target_dir: str) -> Optional[str]:
+def clone_repo(project_id: str, token: str, branch: str, target_dir: str, gitlab_url: str = 'https://gitlab.com') -> Optional[str]:
     """Clone a git repository to a target directory.
     
     Args:
@@ -327,6 +327,7 @@ def clone_repo(project_id: str, token: str, branch: str, target_dir: str) -> Opt
         token: GitLab access token
         branch: Branch to clone
         target_dir: Directory to clone into
+        gitlab_url: Base URL of the GitLab instance (default: https://gitlab.com)
         
     Returns:
         Path to the cloned repository or None if failed
@@ -337,7 +338,8 @@ def clone_repo(project_id: str, token: str, branch: str, target_dir: str) -> Opt
             shutil.rmtree(target_dir)
             
         # Get the repository URL
-        repo_url = f"https://oauth2:{token}@gitlab.com/{project_id}.git"
+        base_url = gitlab_url.rstrip('/').replace('https://', '').replace('http://', '')
+        repo_url = f"https://oauth2:{token}@{base_url}/{project_id}.git"
         
         # Clone the specific branch
         cmd = [
@@ -618,14 +620,26 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         
         # Clone source branch
         print(colored("\n=== Cloning Source Repository ===", "cyan"))
-        src_repo_path = clone_repo(args.source_project_id, token, args.source_branch, src_tmpdir)
+        src_repo_path = clone_repo(
+            project_id=args.source_project_id,
+            token=token,
+            branch=args.source_branch,
+            target_dir=src_tmpdir,
+            gitlab_url=gitlab_url
+        )
         if not src_repo_path:
             print(colored("Failed to clone source repository", "red"))
             return
             
         # Clone target branch
         print(colored("\n=== Cloning Target Repository ===", "cyan"))
-        tgt_repo_path = clone_repo(args.target_project_id, token, args.target_branch, tgt_tmpdir)
+        tgt_repo_path = clone_repo(
+            project_id=args.target_project_id,
+            token=token,
+            branch=args.target_branch,
+            target_dir=tgt_tmpdir,
+            gitlab_url=gitlab_url
+        )
         if not tgt_repo_path:
             print(colored("Failed to clone target repository", "red"))
             return
