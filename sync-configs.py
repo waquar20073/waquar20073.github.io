@@ -338,8 +338,33 @@ def clone_repo(project_id: str, token: str, branch: str, target_dir: str, gitlab
             shutil.rmtree(target_dir)
             
         # Get the repository URL
-        base_url = gitlab_url.rstrip('/').replace('https://', '').replace('http://', '')
-        repo_url = f"https://oauth2:{token}@{base_url}/{project_id}.git"
+        base_url = gitlab_url.rstrip('/')
+        # For self-hosted GitLab, the project_id might be URL-encoded
+        # We need to ensure it's properly formatted for the git clone URL
+        if not project_id.startswith(('http://', 'https://')):
+            # Handle project paths (e.g., 'group/project' or 'group%2Fproject')
+            if '%2F' not in project_id and '/' not in project_id:
+                # If it's just a project ID (number), we need to get the full path first
+                try:
+                    import urllib.parse
+                    api_url = f"{base_url}/api/v4/projects/{urllib.parse.quote(project_id, safe='')}"
+                    project_info = get_gitlab_api_paged(api_url, token, {})
+                    if project_info and 'path_with_namespace' in project_info[0]:
+                        project_path = project_info[0]['path_with_namespace']
+                    else:
+                        project_path = project_id
+                except Exception as e:
+                    print(colored(f"Error getting project info: {e}", "yellow"))
+                    project_path = project_id
+            else:
+                project_path = project_id
+                
+            # Ensure the project path is properly URL-encoded for the git clone URL
+            project_path = project_path.replace(' ', '%20')
+            repo_url = f"{base_url.replace('://', f'://oauth2:{token}@')}/{project_path}.git"
+        else:
+            # If it's already a full URL, just add the token
+            repo_url = project_id.replace('://', f'://oauth2:{token}@')
         
         # Clone the specific branch
         cmd = [
@@ -823,18 +848,14 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
     # Select target project and branch
     tgt_proj_name = select_from_list("Select TARGET project:", tgt_project_names)
     args.target_project_id = tgt_projects[tgt_proj_name]
-    tgt_branches = get_repo_branches(gitlab_url, args.target_project_id, token)
-    args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
-    
-    # Allow selecting the same project for source and target
-    tgt_proj_name = select_from_list("Select TARGET project:", list(projects.keys()))
-    args.target_project_id = projects[tgt_proj_name]
     
     # Get branches for the target project
     tgt_branches = get_repo_branches(gitlab_url, args.target_project_id, token)
     if not tgt_branches:
         print(colored(f"Error: No branches found for target project {tgt_proj_name}", "red"))
         sys.exit(1)
+        
+    args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
     
     # Handle branch selection based on project selection
     if src_proj_name == tgt_proj_name:
