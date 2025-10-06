@@ -600,24 +600,53 @@ def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch
     Returns:
         bool: True if MR was created successfully, False otherwise
     """
+    # Ensure gitlab_url doesn't end with a slash
+    gitlab_url = gitlab_url.rstrip('/')
+    
+    # URL-encode the project_id if it's a path
+    import urllib.parse
+    if not project_id.isdigit() and '/' in project_id:
+        project_id = urllib.parse.quote(project_id, safe='')
+    
     api_url = f"{gitlab_url}/api/v4/projects/{project_id}/merge_requests"
-    headers = {"PRIVATE-TOKEN": token, "Content-Type": "application/json"}
+    headers = {
+        "PRIVATE-TOKEN": token, 
+        "Content-Type": "application/json"
+    }
+    
     payload = {
         "source_branch": source_branch,
         "target_branch": target_branch,
         "title": title,
         "description": description,
         "remove_source_branch": True,
-        "squash": True
+        "squash": False
     }
     
+    print(colored(f"\nCreating merge request from {source_branch} to {target_branch}...", "cyan"))
+    print(colored(f"API URL: {api_url}", "cyan"))
+    
     try:
-        response = requests.post(api_url, headers=headers, json=payload, timeout=30)
+        response = requests.post(
+            api_url, 
+            headers=headers, 
+            json=payload, 
+            timeout=30
+        )
+        
+        # Print response for debugging
+        print(colored(f"MR creation response status: {response.status_code}", "cyan"))
+        if response.text:
+            print(colored(f"Response: {response.text}", "cyan"))
+            
         response.raise_for_status()
-        print(colored(f"Successfully created merge request: {response.json().get('web_url')}", "green"))
+        
+        mr_url = response.json().get('web_url', 'URL not available')
+        print(colored(f"✓ Successfully created merge request: {mr_url}", "green"))
         return True
+        
     except requests.exceptions.RequestException as e:
-        error_msg = f"Failed to create merge request: {e}"
+        error_msg = f"Failed to create merge request: {str(e)}"
         if hasattr(e, 'response') and e.response is not None:
             error_msg += f"\nStatus code: {e.response.status_code}"
             try:
@@ -626,12 +655,6 @@ def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch
                 pass
         print(colored(error_msg, "red"))
         return False
-    try:
-        response = requests.post(api_url, headers={"PRIVATE-TOKEN": token}, json=payload)
-        response.raise_for_status()
-        print(colored(f"Successfully created MR: {response.json()['web_url']}", "green"))
-    except requests.exceptions.RequestException as e:
-        print(colored(f"ERROR creating MR: {e.response.text if e.response else e}", "red"))
 
 # ------------------------------------------------------------------------------
 # SECTION 3: Merge Logic
