@@ -360,10 +360,6 @@ def clone_repo(project_id: str, token: str, branch: str, target_dir: str, gitlab
                     response.raise_for_status()
                     project_info = response.json()
                     
-                    # Debug output
-                    print(colored(f"\nDebug - Project Info API Response:", "cyan"))
-                    print(project_info)
-                    
                     if isinstance(project_info, dict) and 'path_with_namespace' in project_info:
                         project_path = project_info['path_with_namespace']
                         print(colored(f"Using repository path: {project_path}", "green"))
@@ -517,6 +513,11 @@ def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch
 # ------------------------------------------------------------------------------
 
 def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
+    print("\n" + "="*50)
+    print("DEBUG: Starting merge_ini_two_way")
+    print("Source config sections:", source_config.sections())
+    print("Target config sections:", target_config.sections())
+    
     changes = []
     deletions = []
     merged_config = configparser.ConfigParser(interpolation=None)
@@ -530,13 +531,16 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     # Safely get source and target sections
     def get_section_dict(parser, section_name):
         """Helper to safely get a section as a dictionary."""
+        print(f"\nDEBUG: Getting section '{section_name}' from parser")
+        print(f"Parser sections: {parser.sections()}")
+        print(f"Has section '{section_name}': {parser.has_section(section_name)}")
+        
         if not parser.has_section(section_name):
+            print(f"Section '{section_name}' not found, returning empty dict")
             return {}
-        return {k: v for k, v in parser.items(section_name)}
-    
-    # Get sections as dictionaries
-    src = get_section_dict(source_config, 'DEFAULT')
-    tgt = get_section_dict(target_config, 'DEFAULT')
+            
+        items = {k: v for k, v in parser.items(section_name)}
+        print(f"Found {len(items)} items in section '{section_name}'")
     
     # Copy target config to merged config first
     if tgt:  # Only if there are items to copy
