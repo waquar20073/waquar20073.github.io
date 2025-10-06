@@ -883,20 +883,15 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
             "Select TARGET branch (select same branch to create a temporary branch):",
             tgt_branches + ["[Create new temporary branch]"]
         )
-    else:
-        # For different projects, just select the target branch
-        branch_choice = select_from_list("Select TARGET branch:", tgt_branches)
-        
-    args.target_branch = branch_choice
         
         if branch_choice == "[Create new temporary branch]":
             # Generate a timestamp in milliseconds
             timestamp = str(int(datetime.now().timestamp() * 1000))
             
-            # Determine branch type based on target branch name
-            if args.target_branch == 'develop' or args.target_branch.startswith('feature/'):
+            # Determine branch type based on source branch name
+            if args.source_branch == 'develop' or args.source_branch.startswith('feature/'):
                 branch_prefix = 'feature/coreb'
-            elif args.target_branch.startswith('release/'):
+            elif args.source_branch.startswith('release/'):
                 branch_prefix = 'bugfix/coreb'
             else:
                 branch_prefix = 'hotfix/coreb'
@@ -906,9 +901,8 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
         else:
             args.target_branch = branch_choice
             
-            # If same branch is selected, we'll create a temporary branch for the changes
+            # If same branch is selected, create a temporary branch
             if args.target_branch == args.source_branch:
-                # Generate a timestamp in milliseconds
                 timestamp = str(int(datetime.now().timestamp() * 1000))
                 args.original_target_branch = args.target_branch
                 
@@ -923,7 +917,7 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
                 args.target_branch = f"{branch_prefix}-{timestamp}-automated-branch"
                 print(colored(f"\nSame branch selected. Will create temporary branch: {args.target_branch}", "cyan"))
     else:
-        # Different project, can select any branch
+        # For different projects, just select the target branch
         args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
     
     # Store project names for better error messages
