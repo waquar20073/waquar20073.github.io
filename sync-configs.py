@@ -66,84 +66,57 @@ def parse_ini_from_string(content: str) -> configparser.ConfigParser:
     Returns:
         A ConfigParser instance with the parsed content
     """
-    # Create config with DEFAULT section and empty lines in values allowed
-    config = configparser.ConfigParser(
-        interpolation=None,
-        empty_lines_in_values=True,
-        allow_no_value=True,
-        delimiters=('=',),
-        strict=False
-    )
-    config.optionxform = str  # Preserve case sensitivity
+    # Create a custom config parser that doesn't use DEFAULT section
+    class CustomConfigParser(configparser.ConfigParser):
+        def __init__(self):
+            super().__init__(interpolation=None, empty_lines_in_values=True)
+            self.optionxform = str  # Preserve case sensitivity
     
-    # Pre-process content to handle multi-line values and special cases
-    lines = []
-    current_section = 'main'  # Use a different section name to avoid DEFAULT issues
-    in_multiline = False
-    current_key = None
-    current_value = []
-    
-    for line in content.splitlines():
-        line = line.rstrip()
-        
-        # Skip empty lines unless we're in a multi-line value
-        if not line.strip() and not in_multiline:
-            continue
+    # Create a temporary file to write the content
+    import tempfile
+    with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as temp:
+        try:
+            # Write the content to the temp file
+            temp.write(content)
+            temp.flush()
+            temp.close()
             
-        # Handle section headers
-        if line.strip().startswith('[') and line.strip().endswith(']'):
-            # Save any pending value
-            if current_key is not None and current_value:
-                if not config.has_section(current_section):
-                    config.add_section(current_section)
-                config.set(current_section, current_key, '\n'.join(current_value).strip())
-                current_key = None
-                current_value = []
-                
-            current_section = line.strip()[1:-1].strip()
-            in_multiline = False
-            continue
+            # Parse the file directly
+            config = CustomConfigParser()
             
-        # Handle key-value pairs
-        if '=' in line and not in_multiline:
-            # Save any pending value
-            if current_key is not None and current_value:
-                if not config.has_section(current_section):
-                    config.add_section(current_section)
-                config.set(current_section, current_key, '\n'.join(current_value).strip())
+            # First, try to read as-is
+            try:
+                config.read(temp.name, encoding='utf-8')
+            except configparser.MissingSectionHeaderError:
+                # If no section headers, add DEFAULT section
+                with open(temp.name, 'r+', encoding='utf-8') as f:
+                    content = f.read()
+                    f.seek(0)
+                    f.write('[DEFAULT]\n' + content)
+                    f.truncate()
                 
-            key, value = line.split('=', 1)
-            current_key = key.strip()
-            current_value = [value.strip()]
-            in_multiline = True
-        elif in_multiline and current_key is not None:
-            # Continue a multi-line value
-            current_value.append(line)
-    
-    # Save the last value if any
-    if current_key is not None and current_value:
-        if not config.has_section(current_section):
-            config.add_section(current_section)
-        config.set(current_section, current_key, '\n'.join(current_value).strip())
-    
-    # If we only have the 'main' section, rename it to 'DEFAULT'
-    if set(config.sections()) == {'main'} and config.has_section('main'):
-        if not config.has_section('DEFAULT'):
-            config.add_section('DEFAULT')
-        for key, value in config.items('main'):
-            config.set('DEFAULT', key, value)
-        config.remove_section('main')
-    
-    # Debug output
-    print("\n" + "="*50)
-    print("DEBUG: Parsed INI content")
-    print(f"Sections found: {config.sections()}")
-    for section in config.sections():
-        print(f"\nSection: [{section}]")
-        for key, value in config.items(section):
-            print(f"  {key} = {value[:50]}{'...' if len(str(value)) > 50 else ''}")
-    
-    return config
+                # Try reading again
+                config = CustomConfigParser()
+                config.read(temp.name, encoding='utf-8')
+            
+            # Debug output
+            print("\n" + "="*50)
+            print("DEBUG: Parsed INI content")
+            print(f"Sections found: {config.sections()}")
+            for section in config.sections():
+                print(f"\nSection: [{section}]")
+                for key, value in config.items(section):
+                    print(f"  {key} = {value[:50]}{'...' if len(str(value)) > 50 else ''}")
+            
+            return config
+            
+        finally:
+            # Clean up the temp file
+            import os
+            try:
+                os.unlink(temp.name)
+            except:
+                pass
 
 # ------------------------------------------------------------------------------
 # SECTION 1: Core Utilities & Helpers
