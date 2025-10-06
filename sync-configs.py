@@ -8,7 +8,6 @@ Supports multiple modes of operation:
 """
 
 import argparse
-import configparser
 import difflib
 import fnmatch
 import json
@@ -641,37 +640,20 @@ def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch
 def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     print("\n" + "="*50)
     print("DEBUG: Starting merge_ini_two_way")
-    print("Source config sections:", source_config.sections())
-    print("Target config sections:", target_config.sections())
+    print("Source config sections:", list(source_config.keys()))
+    print("Target config sections:", list(target_config.keys()))
     
     changes = []
     deletions = []
-    merged_config = configparser.ConfigParser(interpolation=None)
+    merged_config = {'DEFAULT': {}}
     
-    # Initialize with empty DEFAULT section
-    if not merged_config.has_section('DEFAULT'):
-        merged_config.add_section('DEFAULT')
-    
-    merged_config.optionxform = str
-    
-    # Safely get source and target sections
-    def get_section_dict(parser, section_name):
-        """Helper to safely get a section as a dictionary."""
-        print(f"\nDEBUG: Getting section '{section_name}' from parser")
-        print(f"Parser sections: {parser.sections()}")
-        print(f"Has section '{section_name}': {parser.has_section(section_name)}")
-        
-        if not parser.has_section(section_name):
-            print(f"Section '{section_name}' not found, returning empty dict")
-            return {}
-            
-        items = {k: v for k, v in parser.items(section_name)}
-        print(f"Found {len(items)} items in section '{section_name}'")
+    # Get source and target sections (default to empty dict if not found)
+    src = source_config.get('DEFAULT', {})
+    tgt = target_config.get('DEFAULT', {})
     
     # Copy target config to merged config first
-    if tgt:  # Only if there are items to copy
-        for key, value in tgt.items():
-            merged_config.set('DEFAULT', key, value)
+    if tgt:
+        merged_config['DEFAULT'].update(tgt)
     
     # Process updates and new keys from source
     for key, src_val in src.items():
@@ -691,7 +673,7 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
             final_val = ",".join(sorted(list(tgt_list | src_list)))
         
         if final_val != tgt_val:
-            merged_config.set('DEFAULT', key, final_val)
+            merged_config['DEFAULT'][key] = final_val
             changes.append(f"Update key '{key}': '{tgt_val}' -> '{final_val}'")
     
     # Find keys in target that are not in source (potential deletions)
@@ -700,11 +682,12 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
             continue
             
         if key not in src:
-            deletions.append(f"Remove key '{key}': '{tgt[key]}'")
+            value = tgt[key]
+            deletions.append(f"Remove key '{key}': '{value}'")
             
             # Remove the key from merged config if it exists
-            if merged_config.has_section('DEFAULT') and merged_config.has_option('DEFAULT', key):
-                merged_config.remove_option('DEFAULT', key)
+            if key in merged_config['DEFAULT']:
+                del merged_config['DEFAULT'][key]
     
     # If there are deletions, ask for confirmation
     if deletions:
@@ -715,14 +698,14 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
         confirm = input("\nDo you want to proceed with these deletions? [y/N] ").strip().lower()
         if confirm == 'y':
             for d in deletions:
-                # Extract key from deletion message more reliably
+                # Extract key from deletion message
                 key_match = re.search(r"Remove key '([^']+)'", d)
                 if not key_match:
                     print(colored(f"Warning: Could not parse key from deletion message: {d}", "yellow"))
                     continue
                 key = key_match.group(1)
-                if merged_config.has_section('DEFAULT') and merged_config.has_option('DEFAULT', key):
-                    merged_config.remove_option('DEFAULT', key)
+                if key in merged_config['DEFAULT']:
+                    del merged_config['DEFAULT'][key]
                     changes.append(d)
         else:
             print(colored("Skipping deletions as requested.", "yellow"))
@@ -841,12 +824,14 @@ def run_sync_operation(args: argparse.Namespace, token: str):
             print(f"Target branch: {args.target_branch}")
             print(f"Source file: {args.source_env}")
         
-        # Get config
-        config = configparser.ConfigParser()
-        config.read(args.config_file)
-        gitlab_url = config.get('gitlab', 'url', fallback='https://gitlab.com')
-        ignore_keys = config.get('ignore', 'keys', fallback='').split()
-        csv_strategy = config.get('defaults', 'csv_strategy', fallback='union')
+        # Read and parse config file
+        with open(args.config_file, 'r', encoding='utf-8') as f:
+            config = parse_ini_content(f.read())
+            
+        # Get config values with fallbacks
+        gitlab_url = config.get('gitlab', {}).get('url', 'https://gitlab.com')
+        ignore_keys = config.get('ignore', {}).get('keys', '').split()
+        csv_strategy = config.get('defaults', {}).get('csv_strategy', 'union')
         
         # Clone source branch
         print(colored("\n=== Cloning Source Repository ===", "cyan"))
@@ -930,10 +915,11 @@ def run_sync_operation(args: argparse.Namespace, token: str):
             anc_file = os.path.join(src_repo_path, args.source_env)
             anc_content = ""
             if os.path.exists(anc_file):
-                with open(anc_file, 'r') as f:
+                with open(anc_file, 'r', encoding='utf-8') as f:
                     anc_content = f.read()
             
-            anc_config = parse_ini_from_string(anc_content) if anc_content else configparser.ConfigParser()
+            # Use empty dict if no ancestor content
+            anc_config = parse_ini_from_string(anc_content) if anc_content else {'DEFAULT': {}}
             merged_config, changes, conflicts = merge_ini_three_way(
                 anc_config, src_config, tgt_config, ignore_keys, csv_strategy
             )
@@ -1008,16 +994,18 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         sys.exit(1)
 
 def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
-    config = configparser.ConfigParser(interpolation=None)
-    config.optionxform = str
-    config.read(config_file)
+    # Read and parse config file as dictionary
+    with open(config_file, 'r', encoding='utf-8') as f:
+        config_content = f.read()
+    config = parse_ini_content(config_content)
     
     # Initialize common args
     args = argparse.Namespace(
         config_file=config_file,
         dry_run=False,
         branch_prefix='feature/auto-config-sync',
-        commit_message='chore(config): Automated sync'
+        commit_message='chore(config): Automated sync',
+        token=token or config.get('gitlab', {}).get('token')
     )
     
     # Select source environment and project
@@ -1025,11 +1013,11 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
     src_env = select_from_list("Select SOURCE environment type:", ["non_prod", "prod"])
     src_proj_section = f'projects_{src_env}'
     
-    if not config.has_section(src_proj_section) or not config.items(src_proj_section):
+    if src_proj_section not in config or not config[src_proj_section]:
         print(colored(f"No projects found in '{src_proj_section}' section. Run with --update.", "red"))
         sys.exit(1)
         
-    projects = {name: id for name, id in config.items(src_proj_section)}
+    projects = config[src_proj_section]
     project_names = list(projects.keys())
     
     # Select source project and branch
@@ -1043,11 +1031,11 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
     tgt_env = select_from_list("Select TARGET environment type:", ["non_prod", "prod"])
     tgt_proj_section = f'projects_{tgt_env}'
     
-    if not config.has_section(tgt_proj_section) or not config.items(tgt_proj_section):
+    if tgt_proj_section not in config or not config[tgt_proj_section]:
         print(colored(f"No projects found in '{tgt_proj_section}' section. Run with --update.", "red"))
         sys.exit(1)
         
-    tgt_projects = {name: id for name, id in config.items(tgt_proj_section)}
+    tgt_projects = config[tgt_proj_section]
     tgt_project_names = list(tgt_projects.keys())
     
     # Select target project and branch
@@ -1167,9 +1155,19 @@ def main():
     parser.add_argument("-m", "--commit-message", default="chore(config): Automated configuration sync")
 
     args = parser.parse_args()
-    config = configparser.ConfigParser(); config.read(args.config_file)
-    gitlab_url = config.get('gitlab', 'url', fallback='https://gitlab.com')
-    token = config.get('gitlab', 'token', fallback=None)
+    
+    # Read and parse config file
+    try:
+        with open(args.config_file, 'r', encoding='utf-8') as f:
+            config_content = f.read()
+        config = parse_ini_content(config_content)
+    except Exception as e:
+        print(colored(f"ERROR: Failed to read config file: {e}", "red"))
+        sys.exit(1)
+        
+    gitlab_url = config.get('gitlab', {}).get('url', 'https://gitlab.com')
+    token = config.get('gitlab', {}).get('token')
+    
     if not token:
         print(colored("ERROR: GitLab token not set in sync-config.ini", "red"))
         sys.exit(1)
@@ -1177,7 +1175,8 @@ def main():
     if args.update:
         update_projects_cache(args.config_file, gitlab_url, token)
     elif args.target_project_id and args.target_branch and args.source_env and args.target_envs:
-        if not args.source_project_id: args.source_project_id = args.target_project_id
+        if not args.source_project_id: 
+            args.source_project_id = args.target_project_id
         run_sync_operation(args, token)
     else:
         run_interactive_mode(args.config_file, gitlab_url, token)
