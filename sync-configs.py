@@ -764,23 +764,54 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         sys.exit(1)
 
 def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
-    config = configparser.ConfigParser(interpolation=None); config.optionxform = str; config.read(config_file)
-    args = argparse.Namespace(config_file=config_file, dry_run=False, branch_prefix='feature/auto-config-sync', commit_message='chore(config): Automated sync')
-    env_choice = select_from_list("Select environment type:", ["non_prod", "prod"])
-    proj_section = f'projects_{env_choice}'
-    if not config.has_section(proj_section) or not config.items(proj_section):
-        print(colored(f"No projects found in '{proj_section}' section. Run with --update.", "red"))
-        sys.exit(1)
-    projects = {name: id for name, id in config.items(proj_section)}
+    config = configparser.ConfigParser(interpolation=None)
+    config.optionxform = str
+    config.read(config_file)
     
-    print(colored("\n--- Source Project ---", "cyan"))
+    # Initialize common args
+    args = argparse.Namespace(
+        config_file=config_file,
+        dry_run=False,
+        branch_prefix='feature/auto-config-sync',
+        commit_message='chore(config): Automated sync'
+    )
+    
+    # Select source environment and project
+    print(colored("\n--- Source Environment & Project ---", "cyan"))
+    src_env = select_from_list("Select SOURCE environment type:", ["non_prod", "prod"])
+    src_proj_section = f'projects_{src_env}'
+    
+    if not config.has_section(src_proj_section) or not config.items(src_proj_section):
+        print(colored(f"No projects found in '{src_proj_section}' section. Run with --update.", "red"))
+        sys.exit(1)
+        
+    projects = {name: id for name, id in config.items(src_proj_section)}
     project_names = list(projects.keys())
+    
+    # Select source project and branch
     src_proj_name = select_from_list("Select SOURCE project:", project_names)
     args.source_project_id = projects[src_proj_name]
     src_branches = get_repo_branches(gitlab_url, args.source_project_id, token)
     args.source_branch = select_from_list("Select SOURCE branch:", src_branches)
     
-    print(colored("\n--- Target Project ---", "cyan"))
+    # Select target environment
+    print(colored("\n--- Target Environment & Project ---", "cyan"))
+    tgt_env = select_from_list("Select TARGET environment type:", ["non_prod", "prod"])
+    tgt_proj_section = f'projects_{tgt_env}'
+    
+    if not config.has_section(tgt_proj_section) or not config.items(tgt_proj_section):
+        print(colored(f"No projects found in '{tgt_proj_section}' section. Run with --update.", "red"))
+        sys.exit(1)
+        
+    tgt_projects = {name: id for name, id in config.items(tgt_proj_section)}
+    tgt_project_names = list(tgt_projects.keys())
+    
+    # Select target project and branch
+    tgt_proj_name = select_from_list("Select TARGET project:", tgt_project_names)
+    args.target_project_id = tgt_projects[tgt_proj_name]
+    tgt_branches = get_repo_branches(gitlab_url, args.target_project_id, token)
+    args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
+    
     # Allow selecting the same project for source and target
     tgt_proj_name = select_from_list("Select TARGET project:", list(projects.keys()))
     args.target_project_id = projects[tgt_proj_name]
