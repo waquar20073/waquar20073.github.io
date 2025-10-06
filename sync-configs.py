@@ -66,57 +66,91 @@ def parse_ini_from_string(content: str) -> configparser.ConfigParser:
     Returns:
         A ConfigParser instance with the parsed content
     """
-    # Create a custom config parser that doesn't use DEFAULT section
-    class CustomConfigParser(configparser.ConfigParser):
-        def __init__(self):
-            super().__init__(interpolation=None, empty_lines_in_values=True)
-            self.optionxform = str  # Preserve case sensitivity
+    # Create a new config parser with specific settings
+    config = configparser.ConfigParser(
+        interpolation=None,
+        empty_lines_in_values=True,
+        allow_no_value=True,
+        strict=False
+    )
+    config.optionxform = str  # Preserve case sensitivity
     
-    # Create a temporary file to write the content
-    import tempfile
-    with tempfile.NamedTemporaryFile(mode='w', delete=False, encoding='utf-8') as temp:
-        try:
-            # Write the content to the temp file
-            temp.write(content)
-            temp.flush()
-            temp.close()
-            
-            # Parse the file directly
-            config = CustomConfigParser()
-            
-            # First, try to read as-is
-            try:
-                config.read(temp.name, encoding='utf-8')
-            except configparser.MissingSectionHeaderError:
-                # If no section headers, add DEFAULT section
-                with open(temp.name, 'r+', encoding='utf-8') as f:
-                    content = f.read()
-                    f.seek(0)
-                    f.write('[DEFAULT]\n' + content)
-                    f.truncate()
+    # Pre-process the content to ensure it has a section header
+    lines = content.splitlines()
+    has_section = any(line.strip().startswith('[') and line.strip().endswith(']') for line in lines)
+    
+    # If no section header found, add DEFAULT section
+    if not has_section:
+        content = '[DEFAULT]\n' + content
+    
+    # Try to parse the content
+    try:
+        config.read_string(content)
+    except configparser.MissingSectionHeaderError:
+        # If still fails, try with a different approach
+        config = configparser.ConfigParser(
+            interpolation=None,
+            empty_lines_in_values=True,
+            allow_no_value=True,
+            strict=False
+        )
+        config.optionxform = str
+        config.read_string('[DEFAULT]\n' + content)
+    
+    # If still no sections, try manual parsing
+    if not config.sections():
+        config = configparser.ConfigParser(
+            interpolation=None,
+            empty_lines_in_values=True,
+            allow_no_value=True,
+            strict=False
+        )
+        config.optionxform = str
+        
+        # Add DEFAULT section
+        if not config.has_section('DEFAULT'):
+            config.add_section('DEFAULT')
+        
+        # Parse content manually
+        current_section = 'DEFAULT'
+        for line in content.splitlines():
+            line = line.strip()
+            if not line:
+                continue
                 
-                # Try reading again
-                config = CustomConfigParser()
-                config.read(temp.name, encoding='utf-8')
+            # Handle section headers
+            if line.startswith('[') and line.endswith(']'):
+                current_section = line[1:-1].strip()
+                if not config.has_section(current_section):
+                    config.add_section(current_section)
+                continue
             
-            # Debug output
-            print("\n" + "="*50)
-            print("DEBUG: Parsed INI content")
-            print(f"Sections found: {config.sections()}")
-            for section in config.sections():
-                print(f"\nSection: [{section}]")
-                for key, value in config.items(section):
-                    print(f"  {key} = {value[:50]}{'...' if len(str(value)) > 50 else ''}")
-            
-            return config
-            
-        finally:
-            # Clean up the temp file
-            import os
-            try:
-                os.unlink(temp.name)
-            except:
-                pass
+            # Handle key-value pairs
+            if '=' in line:
+                key, value = line.split('=', 1)
+                key = key.strip()
+                value = value.strip()
+                
+                if not config.has_section(current_section):
+                    config.add_section(current_section)
+                config.set(current_section, key, value)
+    
+    # Debug output
+    print("\n" + "="*50)
+    print("DEBUG: Parsed INI content")
+    print(f"Content length: {len(content)} characters")
+    print(f"Sections found: {config.sections()}")
+    
+    for section in config.sections():
+        print(f"\nSection: [{section}]")
+        for key, value in config.items(section):
+            print(f"  {key} = {value[:50]}{'...' if len(str(value)) > 50 else ''}")
+    
+    if not config.sections():
+        print("\nWARNING: No sections found in INI content!")
+        print("Raw content preview:", content[:200] + ("..." if len(content) > 200 else ""))
+    
+    return config
 
 # ------------------------------------------------------------------------------
 # SECTION 1: Core Utilities & Helpers
