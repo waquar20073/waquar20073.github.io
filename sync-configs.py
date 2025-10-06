@@ -1063,14 +1063,12 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
             timestamp = str(int(datetime.now().timestamp() * 1000))
             
             # Determine branch type based on source branch name
-            if args.source_branch == 'develop' or args.source_branch.startswith('feature/'):
-                branch_prefix = 'feature/coreb'
-            elif args.source_branch.startswith('release/'):
-                branch_prefix = 'bugfix/coreb'
+            if args.source_branch.startswith('release/'):
+                args.target_branch = f"bugfix/coreb-{timestamp}-config-sync-automation"
+            elif args.source_branch == 'develop' or args.source_branch.startswith('feature/'):
+                args.target_branch = f"feature/coreb-{timestamp}-config-sync-automation"
             else:
-                branch_prefix = 'hotfix/coreb'
-                
-            args.target_branch = f"{branch_prefix}-{timestamp}-automated-branch"
+                args.target_branch = f"hotfix/coreb-{timestamp}-config-sync-automation"
             print(colored(f"\nWill create and use temporary branch: {args.target_branch}", "cyan"))
         else:
             args.target_branch = branch_choice
@@ -1081,14 +1079,12 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
                 args.original_target_branch = args.target_branch
                 
                 # Determine branch type based on target branch name
-                if args.target_branch == 'develop' or args.target_branch.startswith('feature/'):
-                    branch_prefix = 'feature/coreb'
-                elif args.target_branch.startswith('release/'):
-                    branch_prefix = 'bugfix/coreb'
+                if args.target_branch.startswith('release/'):
+                    args.target_branch = f"bugfix/coreb-{timestamp}-config-sync-automation"
+                elif args.target_branch == 'develop' or args.target_branch.startswith('feature/'):
+                    args.target_branch = f"feature/coreb-{timestamp}-config-sync-automation"
                 else:
-                    branch_prefix = 'hotfix/coreb'
-                    
-                args.target_branch = f"{branch_prefix}-{timestamp}-automated-branch"
+                    args.target_branch = f"hotfix/coreb-{timestamp}-config-sync-automation"
                 print(colored(f"\nSame branch selected. Will create temporary branch: {args.target_branch}", "cyan"))
     else:
         # For different projects, just select the target branch
