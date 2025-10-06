@@ -896,7 +896,13 @@ def run_sync_operation(args: argparse.Namespace, token: str):
             
         # Get config values with fallbacks
         gitlab_url = config.get('gitlab', {}).get('url', 'https://gitlab.com')
-        ignore_keys = config.get('ignore', {}).get('keys', '').split()
+        
+        # Handle ignore keys - split by comma or whitespace and strip whitespace
+        ignore_keys_str = config.get('ignore', {}).get('keys', '')
+        ignore_keys = [k.strip() for k in re.split(r'[,\s]+', ignore_keys_str) if k.strip()]
+        print(colored(f"\n=== Ignored Keys ===", "cyan"))
+        print(colored(f"Ignoring keys: {ignore_keys}", "cyan"))
+        
         csv_strategy = config.get('defaults', {}).get('csv_strategy', 'union')
         
         # Clone source branch
@@ -1042,17 +1048,27 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         # Create merge request if needed
         if hasattr(args, 'create_mr') and args.create_mr:
             print(colored("\n=== Creating Merge Request ===", "cyan"))
-            mr_created = create_gitlab_mr(
-                gitlab_url=gitlab_url,
-                project_id=args.target_project_id,
-                token=token,
-                source_branch=new_branch,
-                target_branch=args.target_branch,
-                title=f"chore: Update {args.target_envs[0]} from {args.source_branch}",
-                description="Automated configuration sync"
-            )
-            if not mr_created:
-                print(colored("\nFailed to create merge request. You can create it manually with:", "yellow"))
+            print(colored(f"Source branch: {new_branch}", "cyan"))
+            print(colored(f"Target branch: {args.target_branch}", "cyan"))
+            print(colored(f"Project ID: {args.target_project_id}", "cyan"))
+            
+            try:
+                mr_created = create_gitlab_mr(
+                    gitlab_url=gitlab_url,
+                    project_id=args.target_project_id,
+                    token=token,
+                    source_branch=new_branch,
+                    target_branch=args.target_branch,
+                    title=f"chore: Update {args.target_envs[0]} from {args.source_branch}",
+                    description="Automated configuration sync"
+                )
+                if not mr_created:
+                    print(colored("\nFailed to create merge request. You can create it manually with:", "yellow"))
+                    print(colored(f"Source branch: {new_branch}", "yellow"))
+                    print(colored(f"Target branch: {args.target_branch}\n", "yellow"))
+            except Exception as e:
+                print(colored(f"\nError creating merge request: {str(e)}", "red"))
+                print(colored("\nYou can create the merge request manually with:", "yellow"))
                 print(colored(f"Source branch: {new_branch}", "yellow"))
                 print(colored(f"Target branch: {args.target_branch}\n", "yellow"))
     except subprocess.CalledProcessError as e:
