@@ -932,7 +932,13 @@ def update_projects_cache(config_file: str, gitlab_url: str, token: str):
     if 'gitlab' not in config:
         print(colored("ERROR: [gitlab] section not in config!", "red"))
         sys.exit(1)
-        
+    
+    # Save non-project sections to preserve them
+    preserved_sections = {}
+    for section in config:
+        if not section.startswith('projects_') and section != 'gitlab' and section != 'defaults':
+            preserved_sections[section] = config[section].copy()
+    
     gitlab_config = config.get('gitlab', {})
     
     for env in ['prod', 'non_prod']:
@@ -949,11 +955,24 @@ def update_projects_cache(config_file: str, gitlab_url: str, token: str):
         for proj in sorted(projects, key=lambda p: p['name_with_namespace']):
             config[section][proj['name_with_namespace']] = str(proj['id'])
     
+    # Restore preserved sections
+    for section, values in preserved_sections.items():
+        config[section] = values
+    
+    # Create backup of original config
+    backup_file = f"{config_file}.bak"
+    shutil.copy2(config_file, backup_file)
+    print(f"Created backup of config at: {backup_file}")
+    
     # Write the updated config back to file
     with open(config_file, 'w', encoding='utf-8') as f:
         f.write(config_to_string(config))
     
-    print(colored("Project cache updated successfully!", "green"))
+    print(colored("\nProject cache updated successfully!", "green"))
+    print(colored("Changes made to the config file:", "cyan"))
+    print(f"  - Updated project lists in [projects_prod] and [projects_non_prod]")
+    print(f"  - Preserved all other sections including [ignore] and [defaults]")
+    print(colored("\nOriginal config was backed up to:", "yellow") + f" {backup_file}")
 
 def run_sync_operation(args: argparse.Namespace, token: str):
     """Run the sync operation between source and target branches."""

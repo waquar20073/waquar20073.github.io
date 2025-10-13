@@ -47,15 +47,27 @@ keys =
 
 The script has three modes of operation.
 
-### 1. Update Project Cache (First-Time Setup)
+### 1. Update Project Cache (First-Time Setup and Updates)
 
-Before using the interactive mode, you need to build a local cache of your projects. Run the script with the `--update` flag:
+Before using the interactive mode, you need to build a local cache of your projects. This is also required when new projects are added to your GitLab groups.
+
+To update the project cache, run:
 
 ```bash
 python sync-configs.py --update
 ```
 
-This will connect to GitLab, find all the projects in the groups you configured, and store their names and IDs in the `sync-config.ini` file.
+**What this does:**
+1. Connects to your GitLab instance using the token from `sync-config.ini`
+2. Fetches all projects from the configured `prod_group_id` and `non_prod_group_id`
+3. Updates the `[projects_prod]` and `[projects_non_prod]` sections in your config
+4. **Safely preserves** all other sections including `[ignore]` and `[defaults]`
+5. Creates a backup of your config at `sync-config.ini.bak`
+
+**Important Notes:**
+- The script will never modify your `[ignore]` section or any custom sections you've added
+- A backup is created before any changes are made
+- You should run this command whenever new projects are added to your GitLab groups
 
 ### 2. Interactive Mode (Recommended for Manual Use)
 
