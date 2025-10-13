@@ -655,7 +655,12 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     
     changes = []
     deletions = []
-    merged_config = {'DEFAULT': {}}
+    merged_config = {}
+    
+    # Ensure DEFAULT section exists in all configs
+    source_config.setdefault('DEFAULT', {})
+    target_config.setdefault('DEFAULT', {})
+    merged_config['DEFAULT'] = target_config['DEFAULT'].copy()
     
     # Convert ignore_keys to a list if it's a string
     if isinstance(ignore_keys, str):
@@ -779,7 +784,13 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
 
 def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_keys, csv_strategy):
     changes, conflicts = [], []
-    merged_config = {'DEFAULT': {}}
+    merged_config = {}
+    
+    # Ensure DEFAULT section exists in all configs
+    ancestor_config.setdefault('DEFAULT', {})
+    source_config.setdefault('DEFAULT', {})
+    target_config.setdefault('DEFAULT', {})
+    merged_config['DEFAULT'] = target_config['DEFAULT'].copy()
     
     # Convert ignore_keys to a list if it's a string
     if isinstance(ignore_keys, str):
