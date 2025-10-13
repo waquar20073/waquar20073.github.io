@@ -1347,7 +1347,7 @@ def run_interactive_mode(gitlab_url: str, token: str, config: dict):
     print(summary)
     confirm = input("\nProceed with this sync? (y/n): ").lower()
     if confirm == 'y':
-        run_sync_operation(args, token)
+        run_sync_operation(args, token, config)
     else:
         print("Sync cancelled.")
 
