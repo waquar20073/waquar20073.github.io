@@ -172,96 +172,47 @@ def write_ini_file(file_path: str, content: str):
     with open(file_path, 'w', encoding='utf-8') as f:
         f.write(content)
 
-def parse_ini_content(content: str) -> dict:
-    """Parse INI content into a dictionary structure.
+def load_config(config_file: str) -> dict:
+    """Load and parse the JSON configuration file.
     
     Args:
-        content: The INI content as a string
+        config_file: Path to the JSON config file
         
     Returns:
-        A dictionary representing the INI structure with sections and key-value pairs
+        A dictionary representing the configuration
     """
-    result = {}
-    current_section = 'DEFAULT'
-    result[current_section] = {}
+    import json
     
-    print("\n=== DEBUG: Raw INI Content ===")
-    print(f"Content length: {len(content)} characters")
-    print("First 200 chars:", repr(content[:200]))
-    print("Last 100 chars:", repr(content[-100:]))
-    
-    # First, process all sections and keys
-    for line_num, line in enumerate(content.splitlines(), 1):
-        line = line.rstrip()  # Only strip trailing whitespace
+    try:
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+            
+        # Ensure all required sections exist with defaults
+        config.setdefault('gitlab', {})
+        config['gitlab'].setdefault('url', 'https://gitlab.com')
+        config.setdefault('defaults', {})
+        config['defaults'].setdefault('csv_strategy', 'union')
+        config.setdefault('ignore', {})
+        config['ignore'].setdefault('keys', [])
         
-        # Skip comments and empty lines
-        if not line or line.lstrip().startswith(';') or line.lstrip().startswith('#'):
-            print(f"Line {line_num}: [COMMENT/EMPTY] {line}")
-            continue
+        # Ensure ignore keys is a list
+        if isinstance(config['ignore']['keys'], str):
+            config['ignore']['keys'] = [k.strip() for k in config['ignore']['keys'].split(',') if k.strip()]
             
-        # Handle section headers
-        if line.strip().startswith('[') and line.strip().endswith(']'):
-            current_section = line.strip()[1:-1].strip()
-            if current_section not in result:
-                result[current_section] = {}
-            print(f"Line {line_num}: [SECTION] {current_section}")
-            continue
-            
-        # Handle key-value pairs
-        if '=' in line:
-            key, value = line.split('=', 1)
-            key = key.strip()
-            value = value.strip()
-            
-            # Store all values as strings initially
-            result[current_section][key] = value
-            print(f"Line {line_num}: [KEY-VAL] {current_section}.{key} = {value}")
-    
-    # Debug: Print all sections and keys before special handling
-    print("\n=== DEBUG: All Sections and Keys ===")
-    for section, keys in result.items():
-        print(f"Section: {section}")
-        for key, value in keys.items():
-            print(f"  {key} = {repr(value)}")
-    
-    # Special handling for the ignore section
-    print("\n=== DEBUG: Processing Ignore Section ===")
-    if 'ignore' not in result:
-        print("No 'ignore' section found in config")
-    else:
-        print(f"Found 'ignore' section with keys: {list(result['ignore'].keys())}")
-        if 'keys' not in result['ignore']:
-            print("No 'keys' found in 'ignore' section")
-        else:
-            keys_value = result['ignore']['keys']
-            print(f"Raw keys value: {repr(keys_value)}")
-            print(f"Type of keys_value: {type(keys_value).__name__}")
-            
-            if isinstance(keys_value, str):
-                print("Processing as string value...")
-                # Split by newlines and then by commas/whitespace
-                keys = []
-                for line in keys_value.split('\n'):
-                    print(f"  Processing line: {repr(line)}")
-                    for part in line.split(','):
-                        print(f"    Processing part: {repr(part)}")
-                        keys.extend(part.split())
-                # Remove duplicates and empty strings
-                unique_keys = list({k.strip() for k in keys if k.strip()})
-                print(f"  Extracted keys: {unique_keys}")
-                result['ignore']['keys'] = unique_keys
-            else:
-                print("Keys value is not a string, using as-is")
-    
-    # Final debug output
-    print("\n=== DEBUG: Final Ignore Keys ===")
-    if 'ignore' in result and 'keys' in result['ignore']:
-        print(f"Final ignore keys: {result['ignore']['keys']}")
-        print(f"Type: {type(result['ignore']['keys']).__name__}")
-    else:
-        print("No ignore keys found in final result")
-    
-    return result
+        # Debug output
+        print("\n=== Loaded Configuration ===")
+        print(f"GitLab URL: {config['gitlab'].get('url')}")
+        print(f"CSV Strategy: {config['defaults'].get('csv_strategy')}")
+        print(f"Ignore Keys: {config['ignore'].get('keys')}")
+        
+        return config
+        
+    except json.JSONDecodeError as e:
+        print(f"Error parsing JSON config file: {e}")
+        raise
+    except Exception as e:
+        print(f"Error loading config file: {e}")
+        raise
 
 def select_from_list(prompt: str, options: List[Any]) -> Any:
     """Display a numbered menu and get user's selection.
@@ -912,16 +863,9 @@ def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_ke
 # SECTION 4: Application Modes
 # ------------------------------------------------------------------------------
 
-def update_projects_cache(config_file: str, gitlab_url: str, token: str):
-    print("Updating project cache from GitLab...")
-    
-    # Read config file as text
-    with open(config_file, 'r', encoding='utf-8') as f:
-        config_content = f.read()
-    
-    # Parse config as dictionary
-    config = parse_ini_content(config_content)
-    
+def run_interactive_mode(config_file: str, gitlab_url: str, token: str, config: dict):
+    """Run the tool in interactive mode."""
+    print(colored("\n=== Interactive Mode ===", "cyan"))
     if 'gitlab' not in config:
         print(colored("ERROR: [gitlab] section not in config!", "red"))
         sys.exit(1)
@@ -967,7 +911,7 @@ def update_projects_cache(config_file: str, gitlab_url: str, token: str):
     print(f"  - Preserved all other sections including [ignore] and [defaults]")
     print(colored("\nOriginal config was backed up to:", "yellow") + f" {backup_file}")
 
-def run_sync_operation(args: argparse.Namespace, token: str):
+def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
     """Run the sync operation between source and target branches."""
     # Create separate temp directories for source and target
     try:
@@ -978,35 +922,22 @@ def run_sync_operation(args: argparse.Namespace, token: str):
             print(f"Source branch: {args.source_branch}")
             print(f"Target branch: {args.target_branch}")
             print(f"Source file: {args.source_env}")
-        
-        # Read and parse config file
-        with open(args.config_file, 'r', encoding='utf-8') as f:
-            config = parse_ini_content(f.read())
             
-        # Get config values with fallbacks
-        gitlab_url = config.get('gitlab', {}).get('url', 'https://gitlab.com')
-        
-        # Get ignore keys from config (already parsed by parse_ini_content)
-        ignore_keys = config.get('ignore', {}).get('keys', [])
-        
-        # Ensure ignore_keys is a list
-        if isinstance(ignore_keys, str):
-            ignore_keys = [k.strip() for k in ignore_keys.split('\n') if k.strip()]
-        
-        print(colored("\n=== Ignore Keys Processing ===", "cyan"))
-        print(f"Ignore section: {config.get('ignore', {})}")
-        print(f"Ignore keys: {ignore_keys}")
-        print(f"Type of ignore_keys: {type(ignore_keys).__name__}")
-        
-        # Debug: Print the raw config for the ignore section
-        print("\n=== Debug: Config Content ===")
-        print(f"Config sections: {list(config.keys())}")
-        if 'ignore' in config:
-            print(f"Ignore section content: {config['ignore']}")
-        else:
-            print("No 'ignore' section found in config")
-        
-        csv_strategy = config.get('defaults', {}).get('csv_strategy', 'union')
+            # Get config values with fallbacks
+            gitlab_url = config.get('gitlab', {}).get('url', 'https://gitlab.com')
+            
+            # Get ignore keys from config
+            ignore_keys = config.get('ignore', {}).get('keys', [])
+            
+            # Ensure ignore_keys is a list
+            if isinstance(ignore_keys, str):
+                ignore_keys = [k.strip() for k in ignore_keys.split(',') if k.strip()]
+            
+            print(colored("\n=== Ignore Keys Processing ===", "cyan"))
+            print(f"Ignore keys: {ignore_keys}")
+            print(f"Type: {type(ignore_keys).__name__}")
+            
+            csv_strategy = config.get('defaults', {}).get('csv_strategy', 'union')
         
         # Clone source branch
         print(colored("\n=== Cloning Source Repository ===", "cyan"))
@@ -1368,34 +1299,22 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
 # ------------------------------------------------------------------------------
 
 def main():
-    parser = argparse.ArgumentParser(description="Advanced INI Configuration Sync Tool", formatter_class=argparse.RawTextHelpFormatter)
+    parser = argparse.ArgumentParser(description="Advanced Configuration Sync Tool", formatter_class=argparse.RawTextHelpFormatter)
+    parser.add_argument("--config", default="sync-config.json", help="Path to the JSON configuration file (default: sync-config.json)")
     parser.add_argument("--update", action="store_true", help="Update the local cache of GitLab projects and exit.")
+    
     # Non-interactive flags
     parser.add_argument("-tp", "--target-project-id", help="GitLab Project ID to sync TO.")
-    parser.add_argument("-sp", "--source-project-id", help="GitLab Project ID to sync FROM. If omitted, uses target-project-id.")
-    parser.add_argument("-tb", "--target-branch", help="Target branch for sync.")
-    parser.add_argument("-sb", "--source-branch", default="main", help="Source branch name.")
-    parser.add_argument("-sc", "--source-commit", help="Source commit hash (overrides source-branch).")
-    parser.add_argument("-se", "--source-env", help="Source environment file name (e.g., DEV-ABC.ini).")
-    parser.add_argument("-te", "--target-envs", nargs='+', help="List of target environment files (e.g., SIT-ABC.ini).")
-    # Common flags
-    parser.add_argument("-c", "--config-file", default="sync-config.ini", help="Path to the script's configuration file.")
     parser.add_argument("-d", "--dry-run", action="store_true", help="Show changes without writing files or creating MRs.")
     parser.add_argument("-p", "--branch-prefix", default="feature/auto-config-sync")
     parser.add_argument("-m", "--commit-message", default="chore(config): Automated configuration sync")
     parser.add_argument("--no-mr", action="store_false", dest="create_mr", help="Disable automatic MR creation")
-
+    
     args = parser.parse_args()
     
-    # Enable MR creation by default if not explicitly disabled
-    if not hasattr(args, 'create_mr'):
-        args.create_mr = True
-    
-    # Read and parse config file
+    # Load configuration
     try:
-        with open(args.config_file, 'r', encoding='utf-8') as f:
-            config_content = f.read()
-        config = parse_ini_content(config_content)
+        config = load_config(args.config)
     except Exception as e:
         print(colored(f"ERROR: Failed to read config file: {e}", "red"))
         sys.exit(1)
