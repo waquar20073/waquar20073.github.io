@@ -48,14 +48,29 @@ def config_to_string(config: dict) -> str:
         str: The formatted INI content as a string
     """
     output = []
+    
+    # Always include DEFAULT section first if it exists and has items
+    if 'DEFAULT' in config and config['DEFAULT']:
+        for key, value in config['DEFAULT'].items():
+            output.append(f"{key}={value}")
+        if len(config) > 1:  # If there are other sections, add a newline
+            output.append("")
+    
+    # Process other sections
     for section, items in config.items():
-        if section != 'DEFAULT' or items:  # Skip empty DEFAULT section
-            if section != 'DEFAULT':
-                output.append(f"[{section}]")
+        if section == 'DEFAULT':
+            continue  # Already processed
+        if items:  # Only include non-empty sections
+            output.append(f"[{section}]")
             for key, value in items.items():
                 output.append(f"{key}={value}")
             output.append("")  # Add empty line between sections
-    return "\n".join(output).strip()
+    
+    # Remove the last empty line if present
+    if output and output[-1] == "":
+        output = output[:-1]
+        
+    return "\n".join(output)
     
 def parse_ini_from_string(content: str) -> dict:
     """Parse INI content from a string into a dictionary structure.
@@ -710,13 +725,19 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
     if tgt:
         merged_config['DEFAULT'].update(tgt)
     
+    # Track all keys for better reporting
+    all_keys = set(src.keys()) | set(tgt.keys())
+    updated_keys = []
+    ignored_keys = []
+    unchanged_keys = []
+    
     # Process updates and new keys from source
     for key, src_val in src.items():
-        # Skip ignored keys - exact match or pattern match
+        # Check if key should be ignored
         key_ignored = False
         for pattern in ignore_keys:
             if key == pattern or fnmatch.fnmatchcase(key, pattern):
-                print(f"DEBUG: Skipping ignored key (exact/pattern match): {key} matches {pattern}")
+                ignored_keys.append((key, pattern))
                 key_ignored = True
                 break
         if key_ignored:
@@ -751,6 +772,9 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
         if final_val != tgt_val:
             merged_config['DEFAULT'][key] = final_val
             changes.append(f"Update key '{key}': '{tgt_val}' -> '{final_val}'")
+            updated_keys.append(key)
+        else:
+            unchanged_keys.append(key)
     
     # Find keys in target that are not in source (potential deletions)
     for key in list(tgt.keys()):  # Create a list of keys to avoid modifying dict during iteration
@@ -764,6 +788,27 @@ def merge_ini_two_way(source_config, target_config, ignore_keys, csv_strategy):
             # Remove the key from merged config if it exists
             if key in merged_config['DEFAULT']:
                 del merged_config['DEFAULT'][key]
+    
+    # Print key processing summary
+    print("\n" + "="*50)
+    print(colored("KEY PROCESSING SUMMARY", "cyan"))
+    
+    if ignored_keys:
+        print("\n" + colored("IGNORED KEYS (not modified):", "yellow"))
+        for key, pattern in ignored_keys:
+            print(f"  - {key} (matches ignore pattern: {pattern})")
+    
+    if updated_keys:
+        print("\n" + colored("UPDATED KEYS:", "green"))
+        for key in sorted(updated_keys):
+            old_val = tgt.get(key, '')
+            new_val = src.get(key, '')
+            print(f"  - {key}: {old_val} -> {new_val}")
+    
+    if unchanged_keys:
+        print("\n" + colored("UNCHANGED KEYS:", "blue"))
+        for key in sorted(unchanged_keys):
+            print(f"  - {key}")
     
     # If there are deletions, ask for confirmation
     if deletions:
@@ -1083,6 +1128,36 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         print(colored(f"Pushing changes to {new_branch}...", "cyan"))
         subprocess.run(["git", "push", "-u", "origin", new_branch], check=True)
         
+        # Wait for 5 seconds to ensure the branch is fully pushed and propagated
+        print(colored("\nWaiting 5 seconds to ensure branch is fully pushed...", "yellow"))
+        import time
+        time.sleep(5)
+        
+        # Verify the branch exists on remote with retries
+        max_retries = 3
+        retry_delay = 5  # seconds
+        branch_found = False
+        
+        for attempt in range(max_retries):
+            print(colored(f"\nVerifying branch exists on remote (attempt {attempt + 1}/{max_retries})...", "cyan"))
+            verify_cmd = ["git", "ls-remote", "--heads", "origin", new_branch]
+            result = subprocess.run(verify_cmd, capture_output=True, text=True)
+            
+            if new_branch in result.stdout:
+                branch_found = True
+                print(colored("✓ Branch verified on remote repository", "green"))
+                break
+                
+            if attempt < max_retries - 1:
+                print(colored(f"Branch not found yet, waiting {retry_delay} seconds before retry...", "yellow"))
+                time.sleep(retry_delay)
+        
+        if not branch_found:
+            print(colored("\n❌ Error: Branch not found on remote after multiple attempts!", "red"))
+            print(colored(f"Please check if the branch '{new_branch}' exists on the remote repository.", "red"))
+            print(colored("You may need to create the merge request manually.", "red"))
+            return
+        
         # Create merge request if needed
         if hasattr(args, 'create_mr') and args.create_mr:
             print(colored("\n=== Creating Merge Request ===", "cyan"))
@@ -1131,13 +1206,14 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
         config_content = f.read()
     config = parse_ini_content(config_content)
     
-    # Initialize common args
+    # Initialize common args with MR creation enabled by default
     args = argparse.Namespace(
         config_file=config_file,
         dry_run=False,
         branch_prefix='feature/auto-config-sync',
         commit_message='chore(config): Automated sync',
-        token=token or config.get('gitlab', {}).get('token')
+        token=token or config.get('gitlab', {}).get('token'),
+        create_mr=True  # Enable MR creation by default in interactive mode
     )
     
     # Select source environment and project
@@ -1247,12 +1323,18 @@ def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
     args.target_envs = [select_from_list("Select TARGET .ini file:", ini_files)]
     args.source_commit = None # Not supported in interactive mode for simplicity
 
+    # Ask if user wants to create a merge request
+    print(colored("\n--- Merge Request Settings ---", "cyan"))
+    create_mr = input("Create a merge request for these changes? [Y/n]: ").strip().lower()
+    args.create_mr = create_mr != 'n'
+
     print(colored("\n--- Review Sync ---", "cyan"))
     summary = (
         f"  Source Project: {src_proj_name} (ID: {args.source_project_id})\n"
         f"  Target Project: {tgt_proj_name} (ID: {args.target_project_id})\n"
         f"  Source Path:    {args.source_branch} -> {args.source_env}\n"
-        f"  Target Path:    {args.target_branch} -> {args.target_envs[0]}"
+        f"  Target Path:    {args.target_branch} -> {args.target_envs[0]}\n"
+        f"  MR Creation:    {'Yes' if args.create_mr else 'No'}"
     )
     print(summary)
     confirm = input("\nProceed with this sync? (y/n): ").lower()
