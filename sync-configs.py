@@ -49,12 +49,19 @@ def config_to_string(config: dict) -> str:
     """
     output = []
     
-    # Always include DEFAULT section first if it exists and has items
-    if 'DEFAULT' in config and config['DEFAULT']:
-        for key, value in config['DEFAULT'].items():
-            output.append(f"{key}={value}")
-        if len(config) > 1:  # If there are other sections, add a newline
-            output.append("")
+    # Always include DEFAULT section first, even if empty
+    if 'DEFAULT' in config:
+        # Add [DEFAULT] section header
+        output.append("[DEFAULT]")
+        
+        # Add key-value pairs if they exist
+        if config['DEFAULT']:
+            for key, value in config['DEFAULT'].items():
+                output.append(f"{key}={value}")
+            
+            # Add a newline after DEFAULT section if there are other sections
+            if len(config) > 1:
+                output.append("")
     
     # Process other sections
     for section, items in config.items():
