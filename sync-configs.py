@@ -185,6 +185,7 @@ def parse_ini_content(content: str) -> dict:
     current_section = 'DEFAULT'
     result[current_section] = {}
     
+    # First, process all sections and keys
     for line in content.splitlines():
         line = line.strip()
         if not line or line.startswith(';') or line.startswith('#'):
@@ -203,19 +204,26 @@ def parse_ini_content(content: str) -> dict:
             key = key.strip()
             value = value.strip()
             
-            # Handle multi-line values for the ignore section
-            if current_section == 'ignore' and key == 'keys':
-                # If this is the first line of a multi-line value, initialize the list
-                if key not in result[current_section]:
-                    result[current_section][key] = []
-                # Split by whitespace and add to the list
-                result[current_section][key].extend([v for v in value.split() if v])
-            else:
-                result[current_section][key] = value
+            # Store all values as strings initially
+            result[current_section][key] = value
     
-    # Convert the ignore keys list to a string for backward compatibility
-    if 'ignore' in result and 'keys' in result['ignore'] and isinstance(result['ignore']['keys'], list):
-        result['ignore']['keys'] = '\n'.join(result['ignore']['keys'])
+    # Special handling for the ignore section
+    if 'ignore' in result and 'keys' in result['ignore']:
+        keys_value = result['ignore']['keys']
+        if isinstance(keys_value, str):
+            # Split by newlines and then by commas/whitespace
+            keys = []
+            for line in keys_value.split('\n'):
+                for part in line.split(','):
+                    keys.extend(part.split())
+            # Remove duplicates and empty strings
+            result['ignore']['keys'] = list({k.strip() for k in keys if k.strip()})
+    
+    # Debug output
+    if 'ignore' in result and 'keys' in result['ignore']:
+        print("\n=== DEBUG: Parsed Ignore Keys ===")
+        print(f"Raw ignore value: {result['ignore']['keys']}")
+        print(f"Type: {type(result['ignore']['keys']).__name__}")
     
     return result
 
@@ -942,27 +950,25 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         # Get config values with fallbacks
         gitlab_url = config.get('gitlab', {}).get('url', 'https://gitlab.com')
         
-        # Handle ignore keys - support both newline and comma separated values
-        ignore_keys = []
-        ignore_section = config.get('ignore', {})
+        # Get ignore keys from config (already parsed by parse_ini_content)
+        ignore_keys = config.get('ignore', {}).get('keys', [])
         
-        # Handle both string and list formats for backward compatibility
-        if 'keys' in ignore_section:
-            if isinstance(ignore_section['keys'], str):
-                # Split by newlines first, then by commas and whitespace
-                for line in ignore_section['keys'].split('\n'):
-                    for part in line.split(','):
-                        ignore_keys.extend(part.split())
-            elif isinstance(ignore_section['keys'], list):
-                # Already in list format
-                ignore_keys = ignore_section['keys']
+        # Ensure ignore_keys is a list
+        if isinstance(ignore_keys, str):
+            ignore_keys = [k.strip() for k in ignore_keys.split('\n') if k.strip()]
         
-        # Clean up and deduplicate the keys
-        ignore_keys = list({k.strip() for k in ignore_keys if k.strip()})
+        print(colored("\n=== Ignore Keys Processing ===", "cyan"))
+        print(f"Ignore section: {config.get('ignore', {})}")
+        print(f"Ignore keys: {ignore_keys}")
+        print(f"Type of ignore_keys: {type(ignore_keys).__name__}")
         
-        print(colored("\n=== Ignored Keys ===", "cyan"))
-        print(colored(f"Raw ignore values: {ignore_section.get('keys', '')}", "cyan"))
-        print(colored(f"Parsed ignore keys: {ignore_keys}", "cyan"))
+        # Debug: Print the raw config for the ignore section
+        print("\n=== Debug: Config Content ===")
+        print(f"Config sections: {list(config.keys())}")
+        if 'ignore' in config:
+            print(f"Ignore section content: {config['ignore']}")
+        else:
+            print("No 'ignore' section found in config")
         
         csv_strategy = config.get('defaults', {}).get('csv_strategy', 'union')
         
