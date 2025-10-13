@@ -202,73 +202,22 @@ def parse_ini_content(content: str) -> dict:
             key, value = line.split('=', 1)
             key = key.strip()
             value = value.strip()
-            result[current_section][key] = value
             
-    return result
-
-def update_ini_content(original_content: str, updates: dict) -> str:
-    """Update INI content with new values while preserving comments and formatting.
-    
-    Args:
-        original_content: The original INI content
-        updates: Dictionary of updates in the format {'section': {'key': 'value'}}
-        
-    Returns:
-        Updated INI content as a string
-    """
-    lines = original_content.splitlines()
-    result = []
-    current_section = 'DEFAULT'
-    
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        stripped = line.strip()
-        
-        # Preserve empty lines and comments
-        if not stripped or stripped.startswith(';') or stripped.startswith('#'):
-            result.append(line)
-            i += 1
-            continue
-            
-        # Handle section headers
-        if stripped.startswith('[') and ']' in stripped:
-            section_end = stripped.find(']')
-            current_section = stripped[1:section_end].strip()
-            result.append(line)
-            i += 1
-            continue
-            
-        # Handle key-value pairs
-        if '=' in stripped:
-            key = stripped.split('=', 1)[0].strip()
-            
-            # Check if this key should be updated
-            if (current_section in updates and key in updates[current_section]) or \
-               (current_section not in updates and 'DEFAULT' in updates and key in updates['DEFAULT']):
-                # Use the new value
-                new_value = updates.get(current_section, updates.get('DEFAULT', {})).get(key, '')
-                result.append(f"{key}={new_value}")
-                # Skip any continuation lines for this key
-                while i + 1 < len(lines) and lines[i + 1].startswith((' ', '\t')):
-                    i += 1
+            # Handle multi-line values for the ignore section
+            if current_section == 'ignore' and key == 'keys':
+                # If this is the first line of a multi-line value, initialize the list
+                if key not in result[current_section]:
+                    result[current_section][key] = []
+                # Split by whitespace and add to the list
+                result[current_section][key].extend([v for v in value.split() if v])
             else:
-                # Keep the original line
-                result.append(line)
-        else:
-            # Keep lines that aren't key-value pairs
-            result.append(line)
-            
-        i += 1
+                result[current_section][key] = value
     
-    # Add any new sections/keys that didn't exist before
-    for section, items in updates.items():
-        if section not in [s for s in result if s.startswith('[') and s.endswith(']')]:
-            result.append(f"\n[{section}]")
-            for key, value in items.items():
-                result.append(f"{key}={value}")
+    # Convert the ignore keys list to a string for backward compatibility
+    if 'ignore' in result and 'keys' in result['ignore'] and isinstance(result['ignore']['keys'], list):
+        result['ignore']['keys'] = '\n'.join(result['ignore']['keys'])
     
-    return '\n'.join(result)
+    return result
 
 def select_from_list(prompt: str, options: List[Any]) -> Any:
     """Display a numbered menu and get user's selection.
@@ -993,16 +942,26 @@ def run_sync_operation(args: argparse.Namespace, token: str):
         # Get config values with fallbacks
         gitlab_url = config.get('gitlab', {}).get('url', 'https://gitlab.com')
         
-        # Handle ignore keys - split by comma or whitespace and strip whitespace
-        ignore_keys_str = config.get('ignore', {}).get('keys', '')
-        # Split by comma first, then by whitespace, and flatten the list
+        # Handle ignore keys - support both newline and comma separated values
         ignore_keys = []
-        for part in ignore_keys_str.split(','):
-            ignore_keys.extend(part.split())
-        ignore_keys = [k.strip() for k in ignore_keys if k.strip()]
+        ignore_section = config.get('ignore', {})
+        
+        # Handle both string and list formats for backward compatibility
+        if 'keys' in ignore_section:
+            if isinstance(ignore_section['keys'], str):
+                # Split by newlines first, then by commas and whitespace
+                for line in ignore_section['keys'].split('\n'):
+                    for part in line.split(','):
+                        ignore_keys.extend(part.split())
+            elif isinstance(ignore_section['keys'], list):
+                # Already in list format
+                ignore_keys = ignore_section['keys']
+        
+        # Clean up and deduplicate the keys
+        ignore_keys = list({k.strip() for k in ignore_keys if k.strip()})
         
         print(colored("\n=== Ignored Keys ===", "cyan"))
-        print(colored(f"Raw ignore string: '{ignore_keys_str}'", "cyan"))
+        print(colored(f"Raw ignore values: {ignore_section.get('keys', '')}", "cyan"))
         print(colored(f"Parsed ignore keys: {ignore_keys}", "cyan"))
         
         csv_strategy = config.get('defaults', {}).get('csv_strategy', 'union')
