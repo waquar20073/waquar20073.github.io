@@ -863,6 +863,68 @@ def merge_ini_three_way(ancestor_config, source_config, target_config, ignore_ke
 # SECTION 4: Application Modes
 # ------------------------------------------------------------------------------
 
+def update_projects_cache(config_file: str, gitlab_url: str, token: str):
+    """Update the local cache of GitLab projects."""
+    print(colored("\n=== Updating Project Cache ===", "cyan"))
+    
+    import json
+    
+    # Read existing config
+    try:
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+    except Exception as e:
+        print(colored(f"Error reading config file: {e}", "red"))
+        return
+    
+    # Ensure required sections exist
+    config.setdefault('gitlab', {})
+    config.setdefault('defaults', {})
+    config.setdefault('projects_prod', {})
+    config.setdefault('projects_non_prod', {})
+    
+    # Get group IDs with defaults
+    gitlab_config = config.get('gitlab', {})
+    prod_group_id = gitlab_config.get('prod_group_id')
+    non_prod_group_id = gitlab_config.get('non_prod_group_id')
+    
+    if not prod_group_id or not non_prod_group_id:
+        print(colored("ERROR: prod_group_id and non_prod_group_id must be set in the gitlab section of the config file", "red"))
+        return
+    
+    # Get projects from GitLab
+    print("Fetching production projects...")
+    prod_projects = get_group_projects(gitlab_url, prod_group_id, token)
+    print(f"Found {len(prod_projects)} production projects")
+    
+    print("\nFetching non-production projects...")
+    non_prod_projects = get_group_projects(gitlab_url, non_prod_group_id, token)
+    print(f"Found {len(non_prod_projects)} non-production projects")
+    
+    # Update project lists
+    config['projects_prod'] = {proj['name_with_namespace']: str(proj['id']) for proj in prod_projects}
+    config['projects_non_prod'] = {proj['name_with_namespace']: str(proj['id']) for proj in non_prod_projects}
+    
+    # Create backup of original config
+    backup_file = f"{config_file}.bak"
+    shutil.copy2(config_file, backup_file)
+    print(f"Created backup of config at: {backup_file}")
+    
+    # Write the updated config back to file
+    try:
+        with open(config_file, 'w', encoding='utf-8') as f:
+            json.dump(config, f, indent=2, sort_keys=True)
+        
+        print(colored("\nProject cache updated successfully!", "green"))
+        print(colored("Changes made to the config file:", "cyan"))
+        print(f"  - Updated project lists in projects_prod and projects_non_prod")
+        print(colored("\nOriginal config was backed up to:", "yellow") + f" {backup_file}")
+        
+    except Exception as e:
+        print(colored(f"\nError writing config file: {e}", "red"))
+        print(colored("Original config was backed up to:", "yellow") + f" {backup_file}")
+
+
 def run_interactive_mode(config_file: str, gitlab_url: str, token: str, config: dict):
     """Run the tool in interactive mode."""
     print(colored("\n=== Interactive Mode ===", "cyan"))
@@ -1323,17 +1385,17 @@ def main():
     token = config.get('gitlab', {}).get('token')
     
     if not token:
-        print(colored("ERROR: GitLab token not set in sync-config.ini", "red"))
+        print(colored("ERROR: GitLab token not set in configuration file", "red"))
         sys.exit(1)
 
     if args.update:
-        update_projects_cache(args.config_file, gitlab_url, token)
+        update_projects_cache(args.config, gitlab_url, token)
     elif args.target_project_id and args.target_branch and args.source_env and args.target_envs:
         if not args.source_project_id: 
             args.source_project_id = args.target_project_id
-        run_sync_operation(args, token)
+        run_sync_operation(args, token, config)
     else:
-        run_interactive_mode(args.config_file, gitlab_url, token)
+        run_interactive_mode(config, gitlab_url, token, config)
 
 if __name__ == "__main__":
     main()
