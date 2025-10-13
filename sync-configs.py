@@ -1213,15 +1213,10 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
         print(colored("\nTemporary directories will be automatically cleaned up by the system.", "yellow"))
         sys.exit(1)
 
-def run_interactive_mode(config_file: str, gitlab_url: str, token: str):
-    # Read and parse config file as dictionary
-    with open(config_file, 'r', encoding='utf-8') as f:
-        config_content = f.read()
-    config = parse_ini_content(config_content)
-    
+def run_interactive_mode(gitlab_url: str, token: str, config: dict):
     # Initialize common args with MR creation enabled by default
     args = argparse.Namespace(
-        config_file=config_file,
+        config_file=config.get('config_file', 'sync-config.json'),
         dry_run=False,
         branch_prefix='feature/auto-config-sync',
         commit_message='chore(config): Automated sync',
@@ -1395,7 +1390,7 @@ def main():
             args.source_project_id = args.target_project_id
         run_sync_operation(args, token, config)
     else:
-        run_interactive_mode(config, gitlab_url, token, config)
+        run_interactive_mode(gitlab_url, token, config)
 
 if __name__ == "__main__":
     main()
