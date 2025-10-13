@@ -185,17 +185,26 @@ def parse_ini_content(content: str) -> dict:
     current_section = 'DEFAULT'
     result[current_section] = {}
     
+    print("\n=== DEBUG: Raw INI Content ===")
+    print(f"Content length: {len(content)} characters")
+    print("First 200 chars:", repr(content[:200]))
+    print("Last 100 chars:", repr(content[-100:]))
+    
     # First, process all sections and keys
-    for line in content.splitlines():
-        line = line.strip()
-        if not line or line.startswith(';') or line.startswith('#'):
+    for line_num, line in enumerate(content.splitlines(), 1):
+        line = line.rstrip()  # Only strip trailing whitespace
+        
+        # Skip comments and empty lines
+        if not line or line.lstrip().startswith(';') or line.lstrip().startswith('#'):
+            print(f"Line {line_num}: [COMMENT/EMPTY] {line}")
             continue
             
         # Handle section headers
-        if line.startswith('[') and line.endswith(']'):
-            current_section = line[1:-1].strip()
+        if line.strip().startswith('[') and line.strip().endswith(']'):
+            current_section = line.strip()[1:-1].strip()
             if current_section not in result:
                 result[current_section] = {}
+            print(f"Line {line_num}: [SECTION] {current_section}")
             continue
             
         # Handle key-value pairs
@@ -206,24 +215,51 @@ def parse_ini_content(content: str) -> dict:
             
             # Store all values as strings initially
             result[current_section][key] = value
+            print(f"Line {line_num}: [KEY-VAL] {current_section}.{key} = {value}")
+    
+    # Debug: Print all sections and keys before special handling
+    print("\n=== DEBUG: All Sections and Keys ===")
+    for section, keys in result.items():
+        print(f"Section: {section}")
+        for key, value in keys.items():
+            print(f"  {key} = {repr(value)}")
     
     # Special handling for the ignore section
-    if 'ignore' in result and 'keys' in result['ignore']:
-        keys_value = result['ignore']['keys']
-        if isinstance(keys_value, str):
-            # Split by newlines and then by commas/whitespace
-            keys = []
-            for line in keys_value.split('\n'):
-                for part in line.split(','):
-                    keys.extend(part.split())
-            # Remove duplicates and empty strings
-            result['ignore']['keys'] = list({k.strip() for k in keys if k.strip()})
+    print("\n=== DEBUG: Processing Ignore Section ===")
+    if 'ignore' not in result:
+        print("No 'ignore' section found in config")
+    else:
+        print(f"Found 'ignore' section with keys: {list(result['ignore'].keys())}")
+        if 'keys' not in result['ignore']:
+            print("No 'keys' found in 'ignore' section")
+        else:
+            keys_value = result['ignore']['keys']
+            print(f"Raw keys value: {repr(keys_value)}")
+            print(f"Type of keys_value: {type(keys_value).__name__}")
+            
+            if isinstance(keys_value, str):
+                print("Processing as string value...")
+                # Split by newlines and then by commas/whitespace
+                keys = []
+                for line in keys_value.split('\n'):
+                    print(f"  Processing line: {repr(line)}")
+                    for part in line.split(','):
+                        print(f"    Processing part: {repr(part)}")
+                        keys.extend(part.split())
+                # Remove duplicates and empty strings
+                unique_keys = list({k.strip() for k in keys if k.strip()})
+                print(f"  Extracted keys: {unique_keys}")
+                result['ignore']['keys'] = unique_keys
+            else:
+                print("Keys value is not a string, using as-is")
     
-    # Debug output
+    # Final debug output
+    print("\n=== DEBUG: Final Ignore Keys ===")
     if 'ignore' in result and 'keys' in result['ignore']:
-        print("\n=== DEBUG: Parsed Ignore Keys ===")
-        print(f"Raw ignore value: {result['ignore']['keys']}")
+        print(f"Final ignore keys: {result['ignore']['keys']}")
         print(f"Type: {type(result['ignore']['keys']).__name__}")
+    else:
+        print("No ignore keys found in final result")
     
     return result
 
