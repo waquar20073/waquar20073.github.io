@@ -1,6 +1,6 @@
-# INI Configuration Sync Tool
+# Configuration Sync Tool
 
-This is an advanced command-line tool for synchronizing `.ini` configuration files between different branches or even different GitLab projects. It supports 3-way merging to prevent data loss, a user-friendly interactive mode, and a flag-based mode for automation.
+This is an advanced command-line tool for synchronizing configuration files (INI format) between different branches or even different GitLab projects. It supports 3-way merging to prevent data loss, a user-friendly interactive mode, and a flag-based mode for automation.
 
 ## Features
 
@@ -12,36 +12,40 @@ This is an advanced command-line tool for synchronizing `.ini` configuration fil
 
 ## Configuration
 
-The script is configured using the `sync-config.ini` file.
+The script is configured using the `sync-config.json` file.
 
-```ini
-[gitlab]
-url = https://gitlab.com
-# Your personal GitLab access token with api scope.
-token = YOUR_GITLAB_TOKEN
-# The numeric IDs of the GitLab groups containing your projects.
-prod_group_id = 12345
-non_prod_group_id = 67890
-
-[defaults]
-csv_strategy = union
-
-[ignore]
-keys = 
-    JAVA_OPTS
-    *.secret
-
-# -- The sections below are managed by the script --
-
-[projects_prod]
-
-[projects_non_prod]
+```json
+{
+  "gitlab": {
+    "url": "https://gitlab.com",
+    "token": "YOUR_GITLAB_TOKEN",
+    "prod_group_id": "YOUR_PROD_GROUP_ID",
+    "non_prod_group_id": "YOUR_NON_PROD_GROUP_ID"
+  },
+  "defaults": {
+    "csv_strategy": "union"
+  },
+  "ignore": {
+    "keys": [
+      "JAVA_OPTS",
+      "*.secret"
+    ]
+  },
+  "projects_prod": {},
+  "projects_non_prod": {}
+}
 ```
 
-- **`[gitlab]` section**:
-    - `url`: The base URL of your GitLab instance.
-    - `token`: Your personal GitLab access token. The script now reads the token from here.
-    - `prod_group_id` / `non_prod_group_id`: The numeric IDs for the GitLab groups that hold your projects. This is used by the `--update` command.
+- **`gitlab` section**:
+  - `url`: The base URL of your GitLab instance.
+  - `token`: Your personal GitLab access token with `api` scope.
+  - `prod_group_id` / `non_prod_group_id`: The numeric IDs for the GitLab groups that hold your projects. These are used by the `--update` command.
+- **`defaults` section**:
+  - `csv_strategy`: Strategy for handling CSV values (default: "union").
+- **`ignore` section**:
+  - `keys`: List of keys to ignore during sync (supports wildcards).
+- **`projects_prod` / `projects_non_prod`**:
+  - These sections are automatically populated by the `--update` command.
 
 ## How to Use
 
@@ -58,16 +62,17 @@ python sync-configs.py --update
 ```
 
 **What this does:**
-1. Connects to your GitLab instance using the token from `sync-config.ini`
+1. Connects to your GitLab instance using the token from `sync-config.json`
 2. Fetches all projects from the configured `prod_group_id` and `non_prod_group_id`
-3. Updates the `[projects_prod]` and `[projects_non_prod]` sections in your config
-4. **Safely preserves** all other sections including `[ignore]` and `[defaults]`
-5. Creates a backup of your config at `sync-config.ini.bak`
+3. Updates the `projects_prod` and `projects_non_prod` objects in your config
+4. **Safely preserves** all other fields including `ignore` and `defaults`
+5. Creates a backup of your config at `sync-config.json.bak`
 
 **Important Notes:**
-- The script will never modify your `[ignore]` section or any custom sections you've added
+- The script will never modify your `ignore` object or any custom fields you've added
 - A backup is created before any changes are made
 - You should run this command whenever new projects are added to your GitLab groups
+- The configuration file is now in JSON format for better structure and type safety
 
 ### 2. Interactive Mode (Recommended for Manual Use)
 
@@ -93,7 +98,8 @@ python sync-configs.py \
     --source-branch main \
     --target-branch main \
     --source-env DEV-ABC.ini \
-    --target-envs SIT-ABC.ini
+    --target-envs SIT-ABC.ini \
+    --config sync-config.json
 ```
 
 **Example 2: Sync a file across different branches in the same project**
@@ -110,21 +116,20 @@ python sync-configs.py \
 ```
 
 **Example 3: Sync a file between two different projects (Non-Prod to Prod)**
-
 ```bash
 python sync-configs.py \
     --source-project-id 12345 \
     --target-project-id 67890 \
     --source-branch main \
-    --target-branch production \
-    --source-env config.ini \
-    --target-envs config.ini
+    --target-branch main \
+    --source-env DEV-ABC.json \
+    --target-envs SIT-ABC.json \
+    --config sync-config.json
 ```
-
 ## Command-Line Arguments
 
 - `--update`: Update the local cache of GitLab projects and exit.
-- `-tp`, `--target-project-id`: GitLab Project ID to sync TO.
+{{ ... }}
 - `-sp`, `--source-project-id`: GitLab Project ID to sync FROM. If omitted, uses target-project-id.
 - `-tb`, `--target-branch`: Target branch for sync.
 - `-sb`, `--source-branch`: Source branch name (default: `main`).
