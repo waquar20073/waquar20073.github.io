@@ -38,45 +38,45 @@ Fore = Colors
 Style = type('Style', (), {'RESET_ALL': Colors.RESET})
 
 
-def config_to_string(config: dict) -> str:
-    """Convert a dictionary to a properly formatted INI string.
-    
-    Args:
-        config: Dictionary with section names as keys and dicts of key-value pairs as values
-        
-    Returns:
-        str: The formatted INI content as a string
-    """
+def config_to_string(config):
+    # Gotta make this dict into an INI string...
     output = []
     
-    # Always include DEFAULT section first, even if empty
+    # Always start with DEFAULT section, even if it's empty
+    # (some tools get cranky if it's not there)
     if 'DEFAULT' in config:
-        # Add [DEFAULT] section header
-        output.append("[DEFAULT]")
+        output.append("[DEFAULT]")  # Gotta have the brackets!
         
-        # Add key-value pairs if they exist
+        # Only add key-values if there are any
         if config['DEFAULT']:
             for key, value in config['DEFAULT'].items():
                 output.append(f"{key}={value}")
             
-            # Add a newline after DEFAULT section if there are other sections
+            # Add some breathing room if there's more stuff coming
             if len(config) > 1:
-                output.append("")
+                output.append("")  # Empty line looks nice
     
-    # Process other sections
+    # Now do the rest of the sections
     for section, items in config.items():
         if section == 'DEFAULT':
-            continue  # Already processed
-        if items:  # Only include non-empty sections
-            output.append(f"[{section}]")
+            continue  # Did this one already
+            
+        # Skip empty sections, they're just taking up space
+        if items:
+            output.append(f"[{section}]")  # Section header in square brackets
+            
+            # Add all the key=value pairs
             for key, value in items.items():
                 output.append(f"{key}={value}")
-            output.append("")  # Add empty line between sections
+                
+            # Add a blank line after each section (looks nicer)
+            output.append("")
     
-    # Remove the last empty line if present
+    # Oops, don't want that extra newline at the end
     if output and output[-1] == "":
         output = output[:-1]
         
+    # Smush it all together with newlines
     return "\n".join(output)
     
 def parse_ini_from_string(content: str) -> dict:
@@ -221,43 +221,57 @@ def load_config(config_file: str) -> dict:
         print(f"Error loading config file: {e}")
         raise
 
-def select_from_list(prompt: str, options: List[Any]) -> Any:
+def select_from_list(prompt: str, options: List[Any], allow_commit_hash: bool = False):
     """Display a numbered menu and get user's selection.
     
     Args:
         prompt: The prompt to display to the user
         options: List of options to display
+        allow_commit_hash: If True, allows direct commit hash input
         
     Returns:
-        The selected option from the list
+        The selected option from the list or the entered commit hash
     """
-    if not options:
+    if not options and not allow_commit_hash:
         raise ValueError("No options provided to select from")
         
-    print(prompt)
-    for i, option in enumerate(options, 1):
-        print(f"  {i}) {option}")
-        
+    print(f"\n{prompt}")
+    
+    if options:
+        for i, option in enumerate(options, 1):
+            print(f"  {i}. {option}")
+    
     while True:
         try:
-            choice = input("Enter number: ").strip()
-            if not choice:  # Handle empty input
-                print(colored("Please enter a number.", "yellow"))
+            choice = input("\nEnter your choice (number) or a commit hash: ").strip()
+            if not choice:
                 continue
                 
-            choice_idx = int(choice) - 1
-            if 0 <= choice_idx < len(options):
-                return options[choice_idx]
+            # If commit hash is allowed and input looks like a commit hash (7-40 hex characters)
+            if allow_commit_hash and re.match(r'^[0-9a-f]{7,40}$', choice, re.IGNORECASE):
+                return choice
                 
-            print(colored(f"Please enter a number between 1 and {len(options)}.", "yellow"))
+            # Check if it's a valid number
+            try:
+                idx = int(choice) - 1
+                if 0 <= idx < len(options):
+                    return options[idx]
+                print(colored(f"Please enter a number between 1 and {len(options)}", "red"))
+            except ValueError:
+                if allow_commit_hash:
+                    print(colored("Please enter a valid number or a commit hash (7-40 hex characters)", "red"))
+                else:
+                    print(colored(f"Please enter a valid number between 1 and {len(options)}", "red"))
             
-        except ValueError:
-            print(colored("Please enter a valid number.", "yellow"))
+        except KeyboardInterrupt:
+            print("\nOperation cancelled by user.")
+            sys.exit(1)
 
 def force_rmtree(path: str, max_retries: int = 3, delay: float = 0.7):
     """A wrapper for shutil.rmtree that retries on PermissionError, common on Windows."""
     for i in range(max_retries):
         try:
+{{ ... }}
             if Path(path).exists():
                 shutil.rmtree(path)
             return
@@ -1254,11 +1268,23 @@ def run_interactive_mode(gitlab_url: str, token: str, config: dict):
     projects = config[src_proj_section]
     project_names = list(projects.keys())
     
-    # Select source project and branch
+    # Select source project and branch or commit
     src_proj_name = select_from_list("Select SOURCE project:", project_names)
     args.source_project_id = projects[src_proj_name]
     src_branches = get_repo_branches(gitlab_url, args.source_project_id, token)
-    args.source_branch = select_from_list("Select SOURCE branch:", src_branches)
+    
+    # Allow entering a commit hash directly
+    print("\n" + "="*80)
+    print(colored("You can either:", "cyan"))
+    print("1. Select a branch from the list below")
+    print("2. Enter a commit hash (7-40 hex characters)")
+    print("="*80 + "\n")
+    
+    args.source_branch = select_from_list(
+        "Select SOURCE branch (or enter commit hash):", 
+        src_branches, 
+        allow_commit_hash=True
+    )
     
     # Select target environment
     print(colored("\n--- Target Environment & Project ---", "cyan"))
@@ -1321,8 +1347,18 @@ def run_interactive_mode(gitlab_url: str, token: str, config: dict):
                     args.target_branch = f"hotfix/coreb-{timestamp}-config-sync-automation"
                 print(colored(f"\nSame branch selected. Will create temporary branch: {args.target_branch}", "cyan"))
     else:
-        # For different projects, just select the target branch
-        args.target_branch = select_from_list("Select TARGET branch:", tgt_branches)
+        # For different projects, allow selecting a branch or entering a commit hash
+        print("\n" + "="*80)
+        print(colored("You can either:", "cyan"))
+        print("1. Select a target branch from the list below")
+        print("2. Enter a commit hash (7-40 hex characters)")
+        print("="*80 + "\n")
+        
+        args.target_branch = select_from_list(
+            "Select TARGET branch (or enter commit hash):", 
+            tgt_branches, 
+            allow_commit_hash=True
+        )
     
     # Store project names for better error messages
     src_proj_display = f"{src_proj_name} ({args.source_branch})"

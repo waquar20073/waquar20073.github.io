@@ -309,26 +309,27 @@ def create_and_push_branch(repo_path: str, new_branch: str, commit_paths: List[s
 def main():
     """The main entry point for the script."""
     parser = argparse.ArgumentParser(description="Config sync tool (3-way merge + multi-target branches)")
-    parser.add_argument("--repo-url", required=True)
-    parser.add_argument("--project-id", required=True, type=int)
-    parser.add_argument("--gitlab-url", default="https://gitlab.com")
+    parser.add_argument("--repo-url", required=True, help="URL of the Git repository")
+    parser.add_argument("--project-id", required=True, type=int, help="GitLab project ID")
+    parser.add_argument("--gitlab-url", default="https://gitlab.com", help="GitLab instance URL")
     parser.add_argument("--config-file", default="sync-config.json", help="path inside repo or local path")
-    parser.add_argument("--source-branch", default="develop")
+    parser.add_argument("--source-branch", default="develop", help="Source branch to sync from")
     parser.add_argument("--source-commit", help="Source commit hash to sync from (overrides source-branch)")
     parser.add_argument("--source-config-filename", default="config.json", help="Filename of the config in the source directory")
     parser.add_argument("--target-config-filename", default="config.json", help="Filename of the config in the target directory")
     parser.add_argument("--target-branches", nargs="+", required=True, help="one or more target branches (release branches)")
-    parser.add_argument("--from-env", default="dev")
-    parser.add_argument("--to-env", nargs="+", required=True)
+    parser.add_argument("--from-env", default="dev", help="Source environment to sync from")
+    parser.add_argument("--to-env", nargs="+", required=True, help="Target environments to sync to")
     parser.add_argument("--services", nargs="+", required=True, help="service folder names")
     parser.add_argument("--gitlab-token-env", default="GITLAB_TOKEN", help="env var that holds GitLab token")
     parser.add_argument("--csv-sep", default=",", help="separator used for CSV-like keys")
-    parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--branch-prefix", default="bugfix/coreb-000-auto-app-config")
-    parser.add_argument("--commit-message", default="chore(config): auto-sync app configuration")
+    parser.add_argument("--dry-run", action="store_true", help="Show changes without making them")
+    parser.add_argument("--branch-prefix", default="bugfix/coreb-000-auto-app-config", help="Prefix for the new branch name")
+    parser.add_argument("--commit-message", default="chore(config): auto-sync app configuration", help="Commit message to use")
     parser.add_argument("--mr-labels", default="", help="comma separated labels to apply to MR")
     parser.add_argument("--schemas-dir", default="schemas", help="directory in repo (or local) where service schemas live (optional)")
     parser.add_argument("--fetch-depth", type=int, default=0, help="Git fetch depth. Use 0 for full history (required for reliable 3-way merge).")
+    parser.add_argument("--same-branch", action="store_true", help="Source and target configs are on the same branch (requires separate clones)")
     args = parser.parse_args()
 
     token = os.environ.get(args.gitlab_token_env)
@@ -343,21 +344,55 @@ def main():
     try:
         for tgt_branch in args.target_branches:
             print(colored(f"\n=== Processing target branch: {tgt_branch} ===", "cyan") )
-            tmpdir = Path(tmpdir_base) / tgt_branch.replace("/", "_")
+            
+            # Set up target directory
+            tmpdir = Path(tmpdir_base) / f"target_{tgt_branch.replace('/', '_')}"
             tmpdir.mkdir(parents=True, exist_ok=True)
+            
+            # Set up source directory if using same-branch mode
+            source_tmpdir = None
+            if args.same_branch and (args.source_commit or args.source_branch != tgt_branch):
+                source_tmpdir = Path(tmpdir_base) / f"source_{tgt_branch.replace('/', '_')}"
+                source_tmpdir.mkdir(parents=True, exist_ok=True)
+                print(f"Cloning source ({args.source_commit or args.source_branch}) to {source_tmpdir}...")
+                try:
+                    clone_repo(
+                        args.repo_url, 
+                        token, 
+                        branch=args.source_commit or args.source_branch,
+                        tmpdir=str(source_tmpdir), 
+                        depth=args.fetch_depth if args.fetch_depth > 0 else None
+                    )
+                except subprocess.CalledProcessError as e:
+                    print(colored(f"ERROR cloning source repo: {e.stderr}", "red"))
+                    overall_success = False
+                    continue
 
-            print("Cloning target branch...")
+            # Clone target branch
+            print(f"Cloning target branch {tgt_branch} to {tmpdir}...")
             try:
-                clone_repo(args.repo_url, token, branch=tgt_branch, tmpdir=str(tmpdir), depth=args.fetch_depth if args.fetch_depth > 0 else None)
+                clone_repo(
+                    args.repo_url, 
+                    token, 
+                    branch=tgt_branch, 
+                    tmpdir=str(tmpdir), 
+                    depth=args.fetch_depth if args.fetch_depth > 0 else None
+                )
             except subprocess.CalledProcessError as e:
-                print(colored(f"ERROR cloning repo for branch {tgt_branch}: {e.stderr}", "red") )
+                print(colored(f"ERROR cloning target repo for branch {tgt_branch}: {e.stderr}", "red") )
                 overall_success = False
                 continue
 
+            # Set up source reference (only used if not using same-branch mode with separate clone)
             source_ref = args.source_commit or f"origin/{args.source_branch}"
-            if not args.source_commit:
+            if not args.source_commit and not source_tmpdir:
                 try:
-                    subprocess.run(["git", "fetch", "origin", args.source_branch], cwd=str(tmpdir), check=True, capture_output=True)
+                    subprocess.run(
+                        ["git", "fetch", "origin", args.source_branch], 
+                        cwd=str(tmpdir), 
+                        check=True, 
+                        capture_output=True
+                    )
                 except subprocess.CalledProcessError as e:
                     print(colored(f"Warning: failed to fetch source branch {args.source_branch}: {e.stderr}", "yellow") )
 
@@ -390,21 +425,39 @@ def main():
                         except (subprocess.CalledProcessError, json.JSONDecodeError):
                             pass # File might not exist in ancestor
 
-                    src_json = {}
-                    try:
-                        source_path = Path(service) / args.from_env / args.source_config_filename
-                        src_blob_ref = f"{source_ref}:{source_path.as_posix()}"
-                        src_content = subprocess.run(["git", "show", src_blob_ref], cwd=str(tmpdir), capture_output=True, text=True, check=True).stdout
-                        src_json = json.loads(src_content)
-                    except (subprocess.CalledProcessError, json.JSONDecodeError):
-                        print(colored(f"[SKIP] Source config not found for {service}/{args.from_env} at {source_ref}", "yellow") )
-                        continue
+                    # Read source config - either from separate clone or same repo
+                    if source_tmpdir:
+                        # Read from separate clone
+                        source_path = source_tmpdir / service / args.from_env / args.source_config_filename
+                        try:
+                            with open(source_path) as f:
+                                src_json = json.load(f)
+                        except (FileNotFoundError, json.JSONDecodeError) as e:
+                            print(colored(f"[SKIP] Source config not found at {source_path}: {e}", "yellow"))
+                            continue
+                    else:
+                        # Original behavior - read from same repo
+                        try:
+                            source_path = Path(service) / args.from_env / args.source_config_filename
+                            src_blob_ref = f"{source_ref}:{source_path.as_posix()}"
+                            src_content = subprocess.run(
+                                ["git", "show", src_blob_ref], 
+                                cwd=str(tmpdir), 
+                                capture_output=True, 
+                                text=True, 
+                                check=True
+                            ).stdout
+                            src_json = json.loads(src_content)
+                        except (subprocess.CalledProcessError, json.JSONDecodeError) as e:
+                            print(colored(f"[SKIP] Source config not found for {service}/{args.from_env} at {source_ref}: {e}", "yellow"))
+                            continue
 
+                    # Read target config
                     tgt_json = json.loads(tgt_file_path.read_text()) if tgt_file_path.exists() else {}
 
                     merged_json, warnings_conflicts, changes = merge_json_configs_three_way(
                         ancestor_json=ancestor_json, src_json=src_json, tgt_json=tgt_json,
-                        ignore_keys=ignore_keys, policy=policy, csv_sep=args.csv_sep
+{{ ... }}
                     )
 
                     if warnings_conflicts:
@@ -512,8 +565,12 @@ def main():
                 print(colored("\nFinished with warnings/errors; check output above.", "yellow") )
 
     finally:
-        if os.path.exists(tmpdir_base):
+        # Clean up all temporary directories
+        if 'tmpdir_base' in locals() and os.path.exists(tmpdir_base):
             shutil.rmtree(tmpdir_base, ignore_errors=True)
+        # Also clean up any source directories that might have been created
+        if 'source_tmpdir' in locals() and source_tmpdir and os.path.exists(source_tmpdir):
+            shutil.rmtree(source_tmpdir, ignore_errors=True)
 
     if not overall_success:
         sys.exit(2)
