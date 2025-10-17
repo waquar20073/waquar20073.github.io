@@ -1470,33 +1470,50 @@ def run_interactive_mode(gitlab_url: str, token: str, config: dict):
     # Store project names for better error messages
     src_proj_display = f"{src_proj_name} ({args.source_branch})"
     tgt_proj_display = f"{tgt_proj_name} ({args.target_branch})"
-
-    proj_info = get_project_info(gitlab_url, args.source_project_id, token)
-    if not proj_info or not isinstance(proj_info, dict) or 'http_url_to_repo' not in proj_info:
-        print(colored(f"Error: Could not retrieve project information for project ID {args.source_project_id}", "red"))
-        print(f"Debug - proj_info: {proj_info}")
+    
+    # Get project info to get the repository URLs
+    src_proj_info = get_project_info(gitlab_url, args.source_project_id, token)
+    tgt_proj_info = get_project_info(gitlab_url, args.target_project_id, token)
+    
+    if not src_proj_info or not isinstance(src_proj_info, dict) or 'http_url_to_repo' not in src_proj_info:
+        print(colored(f"Error: Could not retrieve source project information for project ID {args.source_project_id}", "red"))
+        print(f"Debug - src_proj_info: {src_proj_info}")
+        sys.exit(1)
+    if not tgt_proj_info or not isinstance(tgt_proj_info, dict) or 'http_url_to_repo' not in tgt_proj_info:
+        print(colored(f"Error: Could not retrieve target project information for project ID {args.target_project_id}", "red"))
+        print(f"Debug - tgt_proj_info: {tgt_proj_info}")
         sys.exit(1)
     
-    repo_url = proj_info['http_url_to_repo']
-    if not repo_url:
-        print(colored(f"Error: Project {args.source_project_id} has no repository URL", "red"))
+    src_repo_url = src_proj_info['http_url_to_repo']
+    tgt_repo_url = tgt_proj_info['http_url_to_repo']
+    
+    if not src_repo_url or not tgt_repo_url:
+        print(colored("Error: Missing repository URL for source or target project", "red"))
         sys.exit(1)
-        
-    ini_files = get_repo_ini_files(repo_url, args.source_branch, token)
-    if not ini_files:
-        print(colored(f"No .ini files found in {src_proj_name} on branch {args.source_branch}", "red"))
+    
+    # Get source files
+    print(colored(f"\n--- Source File Selection for {src_proj_display} ---", "cyan"))
+    src_ini_files = get_repo_ini_files(src_repo_url, args.source_branch, token)
+    if not src_ini_files:
+        print(colored(f"No .ini files found in {src_proj_display} on branch/commit {args.source_branch}", "red"))
         sys.exit(1)
-
-    print(colored("\n--- File Selection ---", "cyan"))
-    args.source_env = select_from_list("Select SOURCE .ini file:", ini_files)
-    args.target_envs = [select_from_list("Select TARGET .ini file:", ini_files)]
+    args.source_env = select_from_list("Select SOURCE .ini file:", src_ini_files)
+    
+    # Get target files
+    print(colored(f"\n--- Target File Selection for {tgt_proj_display} ---", "cyan"))
+    tgt_ini_files = get_repo_ini_files(tgt_repo_url, args.target_branch, token)
+    if not tgt_ini_files:
+        print(colored(f"No .ini files found in {tgt_proj_display} on branch {args.target_branch}", "red"))
+        sys.exit(1)
+    args.target_envs = [select_from_list("Select TARGET .ini file:", tgt_ini_files)]
+    
     args.source_commit = None # Not supported in interactive mode for simplicity
-
+    
     # Ask if user wants to create a merge request
     print(colored("\n--- Merge Request Settings ---", "cyan"))
     create_mr = input("Create a merge request for these changes? [Y/n]: ").strip().lower()
     args.create_mr = create_mr != 'n'
-
+    
     print(colored("\n--- Review Sync ---", "cyan"))
     summary = (
         f"  Source Project: {src_proj_name} (ID: {args.source_project_id})\n"
