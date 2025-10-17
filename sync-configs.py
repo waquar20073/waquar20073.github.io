@@ -418,30 +418,51 @@ def get_repo_ini_files(repo_url: str, branch: str, token: str) -> List[str]:
         List of .ini file paths
     """
     with tempfile.TemporaryDirectory() as tmpdir:
+        # Add token to the repo URL for authentication
+        if token and repo_url.startswith("https://"):
+            auth_repo_url = repo_url.replace("https://", f"https://oauth2:{token}@")
+        else:
+            auth_repo_url = repo_url
+            
         # Check if branch is a commit hash
         is_commit_hash = re.match(r'^[0-9a-f]{7,40}$', branch, re.IGNORECASE)
         
-        if is_commit_hash:
-            # For commit hashes, clone the develop branch first
-            subprocess.run(["git", "clone", "--depth", "50", repo_url, tmpdir],
-                         check=True, capture_output=True)
-            # Then checkout the specific commit
-            subprocess.run(["git", "checkout", branch],
-                         cwd=tmpdir, check=True, capture_output=True)
-        else:
-            # For branches, use the original behavior with --single-branch
-            subprocess.run(["git", "clone", "--branch", branch, "--single-branch", 
-                          repo_url, tmpdir], check=True, capture_output=True)
+        try:
+            if is_commit_hash:
+                # For commit hashes, we need to clone with enough depth
+                clone_cmd = ["git", "clone", "--depth", "50", auth_repo_url, tmpdir]
+                result = subprocess.run(clone_cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(colored(f"Error cloning repository: {result.stderr}", "red"))
+                    return []
+                    
+                # Then checkout the specific commit
+                checkout_cmd = ["git", "checkout", branch]
+                result = subprocess.run(checkout_cmd, cwd=tmpdir, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(colored(f"Error checking out commit {branch}: {result.stderr}", "red"))
+                    return []
+            else:
+                # For branches, use --single-branch for efficiency
+                clone_cmd = ["git", "clone", "--branch", branch, "--single-branch", 
+                           "--depth", "1", auth_repo_url, tmpdir]
+                result = subprocess.run(clone_cmd, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(colored(f"Error cloning branch {branch}: {result.stderr}", "red"))
+                    return []
         
-        # Find all .ini files
-        ini_files = []
-        for root, _, files in os.walk(tmpdir):
-            for file in files:
-                if file.endswith('.ini'):
-                    # Get relative path from repo root
-                    rel_path = os.path.relpath(os.path.join(root, file), tmpdir)
-                    ini_files.append(rel_path)
-        return ini_files
+            # Find all .ini files
+            ini_files = []
+            for root, _, files in os.walk(tmpdir):
+                for file in files:
+                    if file.endswith('.ini'):
+                        # Get relative path from repo root
+                        rel_path = os.path.relpath(os.path.join(root, file), tmpdir)
+                        ini_files.append(rel_path)
+            return ini_files
+        except Exception as e:
+            print(colored(f"Error in get_repo_ini_files: {str(e)}", "red"))
+            return []
 
 def clone_repo(project_id: str, token: str, branch: str, target_dir: str, gitlab_url: str = 'https://gitlab.com') -> Optional[str]:
     """Clone a git repository to a target directory.
