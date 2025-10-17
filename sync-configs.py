@@ -1072,7 +1072,7 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
             src_repo_path = clone_repo(
                 project_id=args.source_project_id,
                 token=token,
-                branch='main',  # Clone main branch as base
+                branch='develop',  # Clone develop branch as base
                 target_dir=src_tmpdir,
                 gitlab_url=gitlab_url
             )
