@@ -1064,18 +1064,46 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
             
             csv_strategy = config.get('defaults', {}).get('csv_strategy', 'union')
         
-        # Clone source branch
-        print(colored("\n=== Cloning Source Repository ===", "cyan"))
-        src_repo_path = clone_repo(
-            project_id=args.source_project_id,
-            token=token,
-            branch=args.source_branch,
-            target_dir=src_tmpdir,
-            gitlab_url=gitlab_url
-        )
-        if not src_repo_path:
-            print(colored("Failed to clone source repository", "red"))
-            return
+        # Check if source is a commit hash
+        is_commit_hash = re.match(r'^[0-9a-f]{7,40}$', args.source_branch, re.IGNORECASE)
+        
+        if is_commit_hash:
+            # For commit hashes, we'll use git show to get the file content later
+            src_repo_path = clone_repo(
+                project_id=args.source_project_id,
+                token=token,
+                branch='main',  # Clone main branch as base
+                target_dir=src_tmpdir,
+                gitlab_url=gitlab_url
+            )
+            if not src_repo_path:
+                print(colored("Failed to clone source repository", "red"))
+                return
+                
+            # Check if the commit exists in the repository
+            result = subprocess.run(
+                ["git", "show", f"{args.source_branch}:{args.source_env}"],
+                cwd=src_repo_path,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                print(colored(f"Error: Commit {args.source_branch} not found or file doesn't exist at that commit", "red"))
+                return
+        else:
+            # For branch names, use the normal clone
+            print(colored("\n=== Cloning Source Repository ===", "cyan"))
+            src_repo_path = clone_repo(
+                project_id=args.source_project_id,
+                token=token,
+                branch=args.source_branch,
+                target_dir=src_tmpdir,
+                gitlab_url=gitlab_url
+            )
+            if not src_repo_path:
+                print(colored("Failed to clone source repository", "red"))
+                return
             
         # Clone target branch
         print(colored("\n=== Cloning Target Repository ===", "cyan"))
@@ -1090,16 +1118,32 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
             print(colored("Failed to clone target repository", "red"))
             return
             
-        # Verify source file exists
-        src_file = os.path.join(src_repo_path, args.source_env)
-        if not os.path.exists(src_file):
-            print(colored(f"Error: Source file '{args.source_env}' not found in branch '{args.source_branch}'", "red"))
-            print(f"Files in source repo: {os.listdir(src_repo_path)}")
-            return
-            
         # Get source content
-        with open(src_file, 'r') as f:
-            src_content = f.read()
+        if is_commit_hash:
+            # For commit hashes, use git show to get the file content at that specific commit
+            result = subprocess.run(
+                ["git", "show", f"{args.source_branch}:{args.source_env}"],
+                cwd=src_repo_path,
+                capture_output=True,
+                text=True
+            )
+            
+            if result.returncode != 0:
+                print(colored(f"Error: Could not read file '{args.source_env}' at commit {args.source_branch}", "red"))
+                print(f"Error: {result.stderr}")
+                return
+                
+            src_content = result.stdout
+        else:
+            # For branches, read the file directly from the filesystem
+            src_file = os.path.join(src_repo_path, args.source_env)
+            if not os.path.exists(src_file):
+                print(colored(f"Error: Source file '{args.source_env}' not found in branch '{args.source_branch}'", "red"))
+                print(f"Files in source repo: {os.listdir(src_repo_path)}")
+                return
+                
+            with open(src_file, 'r') as f:
+                src_content = f.read()
             
         # Get target file path
         tgt_file = os.path.join(tgt_repo_path, args.target_envs[0])
