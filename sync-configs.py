@@ -494,21 +494,44 @@ def clone_repo(project_id: str, token: str, branch: str, target_dir: str, gitlab
             # If it's already a full URL, just add the token
             repo_url = project_id.replace('://', f'://oauth2:{token}@')
         
-        # Clone the specific branch
-        cmd = [
-            "git", "clone",
-            "--branch", branch,
-            "--single-branch",
-            "--depth", "1",
-            repo_url,
-            target_dir
-        ]
+        # Check if branch is a commit hash (7-40 hex characters)
+        is_commit_hash = re.match(r'^[0-9a-f]{7,40}$', branch, re.IGNORECASE)
         
-        print(colored(f"Cloning {branch} branch to {target_dir}...", "cyan"))
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        if is_commit_hash:
+            # For commit hashes, first clone the default branch (without --single-branch)
+            # then checkout the specific commit
+            cmd = [
+                "git", "clone",
+                "--depth", "50",  # Get some history to ensure we have the commit
+                repo_url,
+                target_dir
+            ]
+            
+            print(colored(f"Cloning repository to {target_dir}...", "cyan"))
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                # Now checkout the specific commit
+                checkout_cmd = [
+                    "git", "checkout", branch
+                ]
+                result = subprocess.run(checkout_cmd, cwd=target_dir, capture_output=True, text=True)
+        else:
+            # For branch names, use the original behavior
+            cmd = [
+                "git", "clone",
+                "--branch", branch,
+                "--single-branch",
+                "--depth", "1",
+                repo_url,
+                target_dir
+            ]
+            print(colored(f"Cloning {branch} branch to {target_dir}...", "cyan"))
+            result = subprocess.run(cmd, capture_output=True, text=True)
         
         if result.returncode != 0:
-            print(colored(f"Error cloning repository: {result.stderr}", "red"))
+            error_msg = result.stderr or result.stdout or "Unknown error"
+            print(colored(f"Error cloning repository: {error_msg}", "red"))
             return None
             
         return target_dir
