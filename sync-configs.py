@@ -271,7 +271,6 @@ def force_rmtree(path: str, max_retries: int = 3, delay: float = 0.7):
     """A wrapper for shutil.rmtree that retries on PermissionError, common on Windows."""
     for i in range(max_retries):
         try:
-{{ ... }}
             if Path(path).exists():
                 shutil.rmtree(path)
             return
