@@ -237,31 +237,40 @@ def select_from_list(prompt: str, options: List[Any], allow_commit_hash: bool = 
         
     print(f"\n{prompt}")
     
-    if options:
-        for i, option in enumerate(options, 1):
-            print(f"  {i}. {option}")
+    # Display options with numbers
+    for i, option in enumerate(options, 1):
+        print(f"  {i}. {option}")
+    
+    # Add option for commit hash if allowed
+    if allow_commit_hash:
+        print(f"  {len(options) + 1}. Enter commit hash")
     
     while True:
         try:
-            choice = input("\nEnter your choice (number) or a commit hash: ").strip()
+            choice = input("\nEnter your choice (number): ").strip()
             if not choice:
                 continue
-                
-            # If commit hash is allowed and input looks like a commit hash (7-40 hex characters)
-            if allow_commit_hash and re.match(r'^[0-9a-f]{7,40}$', choice, re.IGNORECASE):
-                return choice
                 
             # Check if it's a valid number
             try:
                 idx = int(choice) - 1
+                
+                # If they selected the commit hash option
+                if allow_commit_hash and idx == len(options):
+                    while True:
+                        commit_hash = input("\nEnter commit hash (7-40 hex characters): ").strip()
+                        if re.match(r'^[0-9a-f]{7,40}$', commit_hash, re.IGNORECASE):
+                            return commit_hash
+                        print(colored("Invalid commit hash. Must be 7-40 hex characters.", "red"))
+                
+                # If they selected a regular option
                 if 0 <= idx < len(options):
                     return options[idx]
-                print(colored(f"Please enter a number between 1 and {len(options)}", "red"))
+                    
+                print(colored(f"Please enter a number between 1 and {len(options) + (1 if allow_commit_hash else 0)}", "red"))
+                
             except ValueError:
-                if allow_commit_hash:
-                    print(colored("Please enter a valid number or a commit hash (7-40 hex characters)", "red"))
-                else:
-                    print(colored(f"Please enter a valid number between 1 and {len(options)}", "red"))
+                print(colored(f"Please enter a valid number between 1 and {len(options) + (1 if allow_commit_hash else 0)}", "red"))
             
         except KeyboardInterrupt:
             print("\nOperation cancelled by user.")
