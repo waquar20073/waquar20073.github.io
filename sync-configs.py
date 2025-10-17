@@ -406,12 +406,12 @@ def get_repo_branches(gitlab_url: str, project_id: str, token: str) -> List[str]
         return []
 
 # When showing the file list, you might want to indicate which files exist in target
-def get_repo_ini_files(repo_url: str, branch: str, token: str) -> List[str]:
+def get_repo_ini_files(repo_url: str, ref: str, token: str) -> List[str]:
     """Get list of .ini files in the repository.
     
     Args:
         repo_url: Git repository URL
-        branch: Branch or commit hash to check
+        ref: Branch name or commit hash to check
         token: GitLab access token
         
     Returns:
@@ -424,44 +424,67 @@ def get_repo_ini_files(repo_url: str, branch: str, token: str) -> List[str]:
         else:
             auth_repo_url = repo_url
             
-        # Check if branch is a commit hash
-        is_commit_hash = re.match(r'^[0-9a-f]{7,40}$', branch, re.IGNORECASE)
+        # Check if ref is a commit hash (7-40 hex characters)
+        is_commit_hash = re.match(r'^[0-9a-f]{7,40}$', ref, re.IGNORECASE)
         
         try:
             if is_commit_hash:
-                # For commit hashes, we need to clone with enough depth
-                clone_cmd = ["git", "clone", "--depth", "50", auth_repo_url, tmpdir]
+                # For commit hashes, we need to clone with more history
+                print(colored(f"Cloning repository to find files at commit {ref}...", "cyan"))
+                clone_cmd = ["git", "clone", "--no-single-branch", "--depth", "50", auth_repo_url, tmpdir]
                 result = subprocess.run(clone_cmd, capture_output=True, text=True)
+                
                 if result.returncode != 0:
                     print(colored(f"Error cloning repository: {result.stderr}", "red"))
                     return []
+                
+                # Check if the commit exists
+                check_commit_cmd = ["git", "cat-file", "-e", f"{ref}^{{tree}}"]
+                result = subprocess.run(check_commit_cmd, cwd=tmpdir, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(colored(f"Error: Commit {ref} not found in repository", "red"))
+                    return []
                     
-                # Then checkout the specific commit
-                checkout_cmd = ["git", "checkout", branch]
+                # Checkout the specific commit
+                checkout_cmd = ["git", "checkout", "-f", ref]
                 result = subprocess.run(checkout_cmd, cwd=tmpdir, capture_output=True, text=True)
                 if result.returncode != 0:
-                    print(colored(f"Error checking out commit {branch}: {result.stderr}", "red"))
+                    print(colored(f"Error checking out commit {ref}: {result.stderr}", "red"))
                     return []
             else:
                 # For branches, use --single-branch for efficiency
-                clone_cmd = ["git", "clone", "--branch", branch, "--single-branch", 
+                print(colored(f"Cloning {ref} branch...", "cyan"))
+                clone_cmd = ["git", "clone", "--branch", ref, "--single-branch", 
                            "--depth", "1", auth_repo_url, tmpdir]
                 result = subprocess.run(clone_cmd, capture_output=True, text=True)
                 if result.returncode != 0:
-                    print(colored(f"Error cloning branch {branch}: {result.stderr}", "red"))
+                    print(colored(f"Error cloning branch {ref}: {result.stderr}", "red"))
                     return []
         
             # Find all .ini files
             ini_files = []
             for root, _, files in os.walk(tmpdir):
+                # Skip the .git directory
+                if '.git' in root.split(os.sep):
+                    continue
+                    
                 for file in files:
                     if file.endswith('.ini'):
                         # Get relative path from repo root
                         rel_path = os.path.relpath(os.path.join(root, file), tmpdir)
+                        # Convert Windows path separators to forward slashes for consistency
+                        rel_path = rel_path.replace('\\', '/')
                         ini_files.append(rel_path)
+                        
+            if not ini_files:
+                print(colored(f"No .ini files found in the repository at {ref}", "yellow"))
+                
             return ini_files
+            
         except Exception as e:
             print(colored(f"Error in get_repo_ini_files: {str(e)}", "red"))
+            if 'tmp' in str(e) and 'already exists' in str(e):
+                print(colored("Temporary directory issue. Please try again.", "yellow"))
             return []
 
 def clone_repo(project_id: str, token: str, branch: str, target_dir: str, gitlab_url: str = 'https://gitlab.com') -> Optional[str]:
