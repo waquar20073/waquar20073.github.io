@@ -429,20 +429,20 @@ def get_repo_ini_files(repo_url: str, ref: str, token: str) -> List[str]:
         
         try:
             if is_commit_hash:
-                # For commit hashes, we need to clone with more history
-                print(colored(f"Cloning repository to find files at commit {ref}...", "cyan"))
-                clone_cmd = ["git", "clone", "--no-single-branch", "--depth", "50", auth_repo_url, tmpdir]
+                # For commit hashes, first clone the develop branch
+                print(colored(f"Cloning develop branch to access commit {ref}...", "cyan"))
+                clone_cmd = ["git", "clone", "--branch", "develop", "--depth", "50", auth_repo_url, tmpdir]
                 result = subprocess.run(clone_cmd, capture_output=True, text=True)
                 
                 if result.returncode != 0:
                     print(colored(f"Error cloning repository: {result.stderr}", "red"))
                     return []
                 
-                # Check if the commit exists
-                check_commit_cmd = ["git", "cat-file", "-e", f"{ref}^{{tree}}"]
-                result = subprocess.run(check_commit_cmd, cwd=tmpdir, capture_output=True, text=True)
+                # Fetch the specific commit
+                fetch_cmd = ["git", "fetch", "origin", f"{ref}"]
+                result = subprocess.run(fetch_cmd, cwd=tmpdir, capture_output=True, text=True)
                 if result.returncode != 0:
-                    print(colored(f"Error: Commit {ref} not found in repository", "red"))
+                    print(colored(f"Error fetching commit {ref}: {result.stderr}", "red"))
                     return []
                     
                 # Checkout the specific commit
