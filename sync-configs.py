@@ -411,16 +411,27 @@ def get_repo_ini_files(repo_url: str, branch: str, token: str) -> List[str]:
     
     Args:
         repo_url: Git repository URL
-        branch: Branch to check
+        branch: Branch or commit hash to check
         token: GitLab access token
         
     Returns:
         List of .ini file paths
     """
     with tempfile.TemporaryDirectory() as tmpdir:
-        # Clone the repo
-        subprocess.run(["git", "clone", "--branch", branch, "--single-branch", repo_url, tmpdir], 
-                      check=True, capture_output=True)
+        # Check if branch is a commit hash
+        is_commit_hash = re.match(r'^[0-9a-f]{7,40}$', branch, re.IGNORECASE)
+        
+        if is_commit_hash:
+            # For commit hashes, clone the develop branch first
+            subprocess.run(["git", "clone", "--depth", "50", repo_url, tmpdir],
+                         check=True, capture_output=True)
+            # Then checkout the specific commit
+            subprocess.run(["git", "checkout", branch],
+                         cwd=tmpdir, check=True, capture_output=True)
+        else:
+            # For branches, use the original behavior with --single-branch
+            subprocess.run(["git", "clone", "--branch", branch, "--single-branch", 
+                          repo_url, tmpdir], check=True, capture_output=True)
         
         # Find all .ini files
         ini_files = []
