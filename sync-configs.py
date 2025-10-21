@@ -1382,8 +1382,12 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
         # Create merge request if needed
         if hasattr(args, 'create_mr') and args.create_mr:
             print(colored("\n=== Creating Merge Request ===", "cyan"))
+            
+            # For same-branch syncs, we want to target the original branch, not the temporary one
+            target_branch_for_mr = args.original_target_branch if hasattr(args, 'original_target_branch') else args.target_branch
+            
             print(colored(f"Source branch: {new_branch}", "cyan"))
-            print(colored(f"Target branch: {args.target_branch}", "cyan"))
+            print(colored(f"Target branch: {target_branch_for_mr}", "cyan"))
             print(colored(f"Project ID: {args.target_project_id}", "cyan"))
             
             try:
@@ -1392,19 +1396,19 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
                     project_id=args.target_project_id,
                     token=token,
                     source_branch=new_branch,
-                    target_branch=args.target_branch,
-                    title=f"chore: Update {args.target_envs[0]} from {args.source_branch}",
-                    description="Automated configuration sync"
+                    target_branch=target_branch_for_mr,  # Use the original branch as target
+                    title=f"chore: Update {args.target_envs[0]} (from {args.source_branch} to {target_branch_for_mr})",
+                    description=f"Automated configuration sync\n\nSource: {args.source_branch}\nTarget: {target_branch_for_mr}"
                 )
                 if not mr_created:
                     print(colored("\nFailed to create merge request. You can create it manually with:", "yellow"))
                     print(colored(f"Source branch: {new_branch}", "yellow"))
-                    print(colored(f"Target branch: {args.target_branch}\n", "yellow"))
+                    print(colored(f"Target branch: {target_branch_for_mr}\n", "yellow"))
             except Exception as e:
                 print(colored(f"\nError creating merge request: {str(e)}", "red"))
                 print(colored("\nYou can create the merge request manually with:", "yellow"))
                 print(colored(f"Source branch: {new_branch}", "yellow"))
-                print(colored(f"Target branch: {args.target_branch}\n", "yellow"))
+                print(colored(f"Target branch: {target_branch_for_mr}\n", "yellow"))
     except subprocess.CalledProcessError as e:
         print(colored(f"\nError executing command:", "red"))
         print(colored(f"Command: {e.cmd}", "red"))
