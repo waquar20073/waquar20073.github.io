@@ -1570,10 +1570,25 @@ def run_interactive_mode(gitlab_url: str, token: str, config: dict):
     
     # Get target files
     print(colored(f"\n--- Target File Selection for {tgt_proj_display} ---", "cyan"))
-    tgt_ini_files = get_repo_ini_files(tgt_repo_url, args.target_branch, token)
+    
+    # For same-branch syncs, we should list files from the original branch, not the temporary one
+    branch_to_use = args.original_target_branch if hasattr(args, 'original_target_branch') else args.target_branch
+    print(colored(f"Listing files from branch: {branch_to_use}", "yellow"))
+    
+    tgt_ini_files = get_repo_ini_files(tgt_repo_url, branch_to_use, token)
     if not tgt_ini_files:
-        print(colored(f"No .ini files found in {tgt_proj_display} on branch {args.target_branch}", "red"))
-        sys.exit(1)
+        print(colored(f"No .ini files found in {tgt_proj_display} on branch {branch_to_use}", "red"))
+        # Try to list files from develop if no files found in the target branch
+        if branch_to_use != 'develop':
+            print(colored("Trying to list files from 'develop' branch...", "yellow"))
+            tgt_ini_files = get_repo_ini_files(tgt_repo_url, 'develop', token)
+            if tgt_ini_files:
+                print(colored(f"Found {len(tgt_ini_files)} .ini files in 'develop' branch", "green"))
+        
+        if not tgt_ini_files:
+            print(colored(f"No .ini files found in {tgt_proj_display} on branch {branch_to_use} or 'develop'", "red"))
+            sys.exit(1)
+    
     args.target_envs = [select_from_list("Select TARGET .ini file:", tgt_ini_files)]
     
     args.source_commit = None # Not supported in interactive mode for simplicity
