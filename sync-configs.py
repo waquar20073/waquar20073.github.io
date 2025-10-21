@@ -606,7 +606,7 @@ def compute_three_way_ancestor(repo_path: str, source_ref: str, target_ref: str)
         return subprocess.run(["git", "merge-base", source_ref, target_ref], cwd=repo_path, capture_output=True, text=True, check=True).stdout.strip()
     except subprocess.CalledProcessError: return None
 
-def create_and_push_branch(repo_path: str, new_branch: str, commit_message: str, source_branch: str = None, is_temp_branch: bool = False):
+def create_and_push_branch(repo_path: str, new_branch: str, commit_message: str, source_branch: str = None, is_temp_branch: bool = False) -> Optional[str]:
     """Create a new branch, commit changes, and push to remote.
     
     Args:
@@ -615,33 +615,44 @@ def create_and_push_branch(repo_path: str, new_branch: str, commit_message: str,
         commit_message: Commit message
         source_branch: Optional source branch to base the new branch on
         is_temp_branch: Whether this is a temporary branch for same-branch sync
+        
+    Returns:
+        str: The name of the created branch (or None if failed)
     """
     try:
         # If source_branch is provided, create the new branch from it
         if source_branch:
             subprocess.run(["git", "checkout", source_branch], cwd=repo_path, check=True, capture_output=True, text=True)
         
+        # For temporary branches, we'll use a local branch first
+        local_branch = new_branch
+        if is_temp_branch:
+            # Add a timestamp to make the branch name unique
+            timestamp = int(time.time())
+            local_branch = f"{new_branch}-{timestamp}"
+        
         # Create and switch to the new branch
-        subprocess.run(["git", "checkout", "-b", new_branch], cwd=repo_path, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "checkout", "-b", local_branch], cwd=repo_path, check=True, capture_output=True, text=True)
         
         # Add and commit changes
         subprocess.run(["git", "add", "."], cwd=repo_path, check=True, capture_output=True, text=True)
         subprocess.run(["git", "commit", "-m", commit_message], cwd=repo_path, check=True, capture_output=True, text=True)
         
-        # Push the new branch to remote
-        push_cmd = ["git", "push", "-u", "origin", new_branch]
-        result = subprocess.run(push_cmd, cwd=repo_path, capture_output=True, text=True)
-        
-        if result.returncode != 0:
-            if "has no upstream branch" in result.stderr:
-                # Try to set upstream if not set
-                subprocess.run(["git", "push", "--set-upstream", "origin", new_branch], 
-                             cwd=repo_path, check=True, capture_output=True, text=True)
-            else:
-                result.check_returncode()  # Raise error for other issues
+        # Only push if not a temporary branch
+        if not is_temp_branch:
+            push_cmd = ["git", "push", "-u", "origin", local_branch]
+            result = subprocess.run(push_cmd, cwd=repo_path, capture_output=True, text=True)
+            
+            if result.returncode != 0:
+                if "has no upstream branch" in result.stderr:
+                    # Try to set upstream if not set
+                    subprocess.run(["git", "push", "--set-upstream", "origin", new_branch], 
+                                 cwd=repo_path, check=True, capture_output=True, text=True)
+                else:
+                    result.check_returncode()  # Raise error for other issues
         
         print(colored(f"\nSuccessfully created and pushed branch: {new_branch}", "green"))
-        return True
+        return local_branch if is_temp_branch else new_branch
         
     except subprocess.CalledProcessError as e:
         print(colored(f"\nError creating/pushing branch {new_branch}:", "red"))
@@ -649,7 +660,10 @@ def create_and_push_branch(repo_path: str, new_branch: str, commit_message: str,
             print(colored(e.stderr.strip(), "red"))
         if e.stdout:
             print(colored(e.stdout.strip(), "yellow"))
-        return False
+        return None
+    except Exception as e:
+        print(colored(f"Unexpected error: {str(e)}", "red"))
+        return None
 
 def create_gitlab_mr(gitlab_url: str, project_id: str, token: str, source_branch: str, target_branch: str, title: str, description: str) -> bool:
     """Create a merge request in GitLab.
@@ -1160,18 +1174,30 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
                 print(colored("Failed to clone source repository", "red"))
                 return
             
+        # Check if this is a same-branch sync with a temporary branch
+        is_temp_branch_sync = hasattr(args, 'original_target_branch') and args.original_target_branch == args.source_branch
+        target_branch = args.original_target_branch if hasattr(args, 'original_target_branch') else args.target_branch
+        
         # Clone target branch
         print(colored("\n=== Cloning Target Repository ===", "cyan"))
+        # For same-branch syncs, we need to clone the original branch first
+        clone_branch = target_branch if is_temp_branch_sync else args.target_branch
+        
         tgt_repo_path = clone_repo(
             project_id=args.target_project_id,
             token=token,
-            branch=args.target_branch,
+            branch=clone_branch,
             target_dir=tgt_tmpdir,
             gitlab_url=gitlab_url
         )
         if not tgt_repo_path:
             print(colored("Failed to clone target repository", "red"))
             return
+            
+        # If this is a same-branch sync, create the temporary branch locally
+        if is_temp_branch_sync:
+            print(colored(f"\n=== Creating temporary branch for same-branch sync: {args.target_branch}", "cyan"))
+            subprocess.run(["git", "checkout", "-b", args.target_branch], cwd=tgt_repo_path, check=True)
             
         # Get source content
         if is_commit_hash:
@@ -1222,11 +1248,11 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
         print(colored("\n=== Performing Merge ===", "cyan"))
         
         # Check if this is a temporary branch for same-branch sync
-        is_temp_branch_sync = hasattr(args, 'original_target_branch')
-        target_branch = getattr(args, 'original_target_branch', args.target_branch)
+        is_temp_branch_sync = hasattr(args, 'original_target_branch') and args.original_target_branch == args.source_branch
+        target_branch = args.original_target_branch if hasattr(args, 'original_target_branch') else args.target_branch
         
         # Determine if we're doing a two-way or three-way merge
-        is_same_branch = args.source_branch == target_branch
+        is_same_branch = is_temp_branch_sync or args.source_branch == target_branch
         ancestor = None if is_same_branch else compute_three_way_ancestor(
             tgt_repo_path, args.source_branch, target_branch
         )
@@ -1281,27 +1307,42 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
         # Change to target repo directory
         os.chdir(tgt_repo_path)
         
-        # Create a new branch for the changes with the required naming pattern
-        timestamp = str(int(datetime.now().timestamp() * 1000))
-        if args.target_branch.startswith('release/'):
-            new_branch = f"bugfix/coreb-{timestamp}-config-sync-automation"
-        elif args.target_branch == 'develop' or args.target_branch.startswith('feature/'):
-            new_branch = f"feature/coreb-{timestamp}-config-sync-automation"
-        else:
-            new_branch = f"hotfix/coreb-{timestamp}-config-sync-automation"
+        # For same-branch syncs, we already created the temporary branch
+        if is_temp_branch_sync:
+            new_branch = args.target_branch
+            print(colored(f"Using temporary branch: {new_branch}", "cyan"))
             
-        print(colored(f"Creating new branch: {new_branch}", "cyan"))
+            # Add and commit changes to the temporary branch
+            subprocess.run(["git", "add", args.target_envs[0]], check=True)
+            subprocess.run(
+                ["git", "commit", "-m", f"chore: Update {args.target_envs[0]} from {args.source_branch} (temporary branch for same-branch sync)"],
+                check=True
+            )
+        else:
+            # For normal syncs, create a new branch
+            timestamp = str(int(datetime.now().timestamp() * 1000))
+            if args.target_branch.startswith('release/'):
+                new_branch = f"bugfix/coreb-{timestamp}-config-sync-automation"
+            elif args.target_branch == 'develop' or args.target_branch.startswith('feature/'):
+                new_branch = f"feature/coreb-{timestamp}-config-sync-automation"
+            else:
+                new_branch = f"hotfix/coreb-{timestamp}-config-sync-automation"
+                
+            print(colored(f"Creating new branch: {new_branch}", "cyan"))
+            
+            subprocess.run(["git", "checkout", "-b", new_branch], check=True)
+            subprocess.run(["git", "add", args.target_envs[0]], check=True)
+            subprocess.run(
+                ["git", "commit", "-m", f"chore: Update {args.target_envs[0]} from {args.source_branch}"],
+                check=True
+            )
         
-        subprocess.run(["git", "checkout", "-b", new_branch], check=True)
-        subprocess.run(["git", "add", args.target_envs[0]], check=True)
-        subprocess.run(
-            ["git", "commit", "-m", f"chore: Update {args.target_envs[0]} from {args.source_branch}"],
-            check=True
-        )
-        
-        # Push the new branch
+        # Push the branch if it's not a temporary branch or if we're forcing the push
         print(colored(f"Pushing changes to {new_branch}...", "cyan"))
-        subprocess.run(["git", "push", "-u", "origin", new_branch], check=True)
+        push_cmd = ["git", "push", "-u", "origin", new_branch]
+        if is_temp_branch_sync:
+            push_cmd.append("--force")  # Force push for temporary branches in case they exist
+        subprocess.run(push_cmd, check=True)
         
         # Wait for 5 seconds to ensure the branch is fully pushed and propagated
         print(colored("\nWaiting 5 seconds to ensure branch is fully pushed...", "yellow"))
