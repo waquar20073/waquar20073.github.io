@@ -1180,8 +1180,8 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
         
         # Clone target branch
         print(colored("\n=== Cloning Target Repository ===", "cyan"))
-        # For same-branch syncs, we need to clone the original branch first
-        clone_branch = target_branch if is_temp_branch_sync else args.target_branch
+        # Always clone from develop branch as the base for any operations
+        clone_branch = 'develop'
         
         tgt_repo_path = clone_repo(
             project_id=args.target_project_id,
@@ -1194,10 +1194,15 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
             print(colored("Failed to clone target repository", "red"))
             return
             
-        # If this is a same-branch sync, create the temporary branch locally
+        # If this is a same-branch sync, create the temporary branch locally from develop
         if is_temp_branch_sync:
-            print(colored(f"\n=== Creating temporary branch for same-branch sync: {args.target_branch}", "cyan"))
+            print(colored(f"\n=== Creating temporary branch for same-branch sync: {args.target_branch} from develop", "cyan"))
+            # Make sure we're on develop first
+            subprocess.run(["git", "checkout", "develop"], cwd=tgt_repo_path, check=True)
+            # Create and switch to the new branch
             subprocess.run(["git", "checkout", "-b", args.target_branch], cwd=tgt_repo_path, check=True)
+            # Pull the latest changes from develop to ensure we're up to date
+            subprocess.run(["git", "pull", "origin", "develop"], cwd=tgt_repo_path, check=True)
             
         # Get source content
         if is_commit_hash:
