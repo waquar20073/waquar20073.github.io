@@ -406,7 +406,7 @@ def get_repo_branches(gitlab_url: str, project_id: str, token: str) -> List[str]
         return []
 
 # When showing the file list, you might want to indicate which files exist in target
-def get_repo_ini_files(repo_url: str, ref: str, token: str) -> List[str]:
+def get_repo_ini_files(repo_url: str, ref: str, token: str, use_ssh: bool = False) -> List[str]:
     """Get list of .ini files in the repository.
     
     Args:
@@ -487,7 +487,32 @@ def get_repo_ini_files(repo_url: str, ref: str, token: str) -> List[str]:
                 print(colored("Temporary directory issue. Please try again.", "yellow"))
             return []
 
-def clone_repo(project_id: str, token: str, branch: str, target_dir: str, gitlab_url: str = 'https://gitlab.com') -> Optional[str]:
+def get_clone_url(project_id: str, use_ssh: bool = False, gitlab_url: str = 'https://gitlab.com') -> str:
+    """Get the clone URL for a GitLab project.
+    
+    Args:
+        project_id: The GitLab project ID or path
+        use_ssh: Whether to use SSH URL (True) or HTTPS URL (False)
+        gitlab_url: Base URL of the GitLab instance
+        
+    Returns:
+        The clone URL for the repository
+    """
+    if use_ssh:
+        # Convert HTTPS URL to SSH format if needed
+        if gitlab_url.startswith('http'):
+            domain = gitlab_url.replace('https://', '').replace('http://', '').rstrip('/')
+            return f'git@{domain}:{project_id}.git'
+        return f'git@gitlab.com:{project_id}.git'
+    else:
+        # Ensure gitlab_url has https:// prefix
+        if not gitlab_url.startswith(('http://', 'https://')):
+            gitlab_url = f'https://{gitlab_url}'
+        return f"{gitlab_url.rstrip('/')}/{project_id}.git"
+
+
+def clone_repo(project_id: str, token: str, branch: str, target_dir: str, 
+              gitlab_url: str = 'https://gitlab.com', use_ssh: bool = False) -> Optional[str]:
     """Clone a git repository to a target directory.
     
     Args:
@@ -505,49 +530,17 @@ def clone_repo(project_id: str, token: str, branch: str, target_dir: str, gitlab
         if os.path.exists(target_dir):
             shutil.rmtree(target_dir)
             
-        # Get the repository URL
-        base_url = gitlab_url.rstrip('/')
-        # For self-hosted GitLab, the project_id might be URL-encoded
-        # We need to ensure it's properly formatted for the git clone URL
-        if not project_id.startswith(('http://', 'https://')):
-            # Handle project paths (e.g., 'group/project' or 'group%2Fproject')
-            if '%2F' not in project_id and '/' not in project_id:
-                # If it's just a project ID (number), we need to get the full path first
-                try:
-                    import urllib.parse
-                    import requests
-                    
-                    headers = {
-                        'PRIVATE-TOKEN': token,
-                        'Content-Type': 'application/json'
-                    }
-                    api_url = f"{base_url}/api/v4/projects/{urllib.parse.quote(project_id, safe='')}"
-                    
-                    # Make a direct request to the GitLab API
-                    response = requests.get(api_url, headers=headers)
-                    response.raise_for_status()
-                    project_info = response.json()
-                    
-                    if isinstance(project_info, dict) and 'path_with_namespace' in project_info:
-                        project_path = project_info['path_with_namespace']
-                        print(colored(f"Using repository path: {project_path}", "green"))
-                    else:
-                        print(colored(f"Unexpected API response format. Falling back to project_id.", "yellow"))
-                        project_path = project_id
-                        
-                except Exception as e:
-                    print(colored(f"Error getting project info: {e}", "red"))
-                    print(colored(f"Falling back to using project_id as path", "yellow"))
-                    project_path = project_id
-            else:
-                project_path = project_id
-                
-            # Ensure the project path is properly URL-encoded for the git clone URL
-            project_path = project_path.replace(' ', '%20')
-            repo_url = f"{base_url.replace('://', f'://oauth2:{token}@')}/{project_path}.git"
-        else:
-            # If it's already a full URL, just add the token
-            repo_url = project_id.replace('://', f'://oauth2:{token}@')
+        # Get the repository URL using the helper function
+        repo_url = get_clone_url(project_id, use_ssh, gitlab_url)
+        
+        # If using HTTPS, add the token for authentication
+        if not use_ssh and token:
+            if repo_url.startswith('https://'):
+                repo_url = repo_url.replace('https://', f'https://oauth2:{token}@')
+            elif repo_url.startswith('http://'):
+                repo_url = repo_url.replace('http://', f'http://oauth2:{token}@')
+        
+        print(colored(f"Using repository URL: {repo_url}", "cyan"))
         
         # Check if branch is a commit hash (7-40 hex characters)
         is_commit_hash = re.match(r'^[0-9a-f]{7,40}$', branch, re.IGNORECASE)
@@ -1426,6 +1419,10 @@ def run_sync_operation(args: argparse.Namespace, token: str, config: dict):
         sys.exit(1)
 
 def run_interactive_mode(gitlab_url: str, token: str, config: dict):
+    # Ask for clone protocol preference
+    print(colored("\n--- Repository Clone Settings ---", "cyan"))
+    use_ssh = input("Use SSH for cloning repositories? (y/n, default: n): ").strip().lower() == 'y'
+    
     # Initialize common args with MR creation enabled by default
     args = argparse.Namespace(
         config_file=config.get('config_file', 'sync-config.json'),
@@ -1433,7 +1430,8 @@ def run_interactive_mode(gitlab_url: str, token: str, config: dict):
         branch_prefix='feature/auto-config-sync',
         commit_message='chore(config): Automated sync',
         token=token or config.get('gitlab', {}).get('token'),
-        create_mr=True  # Enable MR creation by default in interactive mode
+        create_mr=True,  # Enable MR creation by default in interactive mode
+        use_ssh=use_ssh  # Store the protocol preference
     )
     
     # Select source environment and project
@@ -1566,7 +1564,7 @@ def run_interactive_mode(gitlab_url: str, token: str, config: dict):
     
     # Get source files
     print(colored(f"\n--- Source File Selection for {src_proj_display} ---", "cyan"))
-    src_ini_files = get_repo_ini_files(src_repo_url, args.source_branch, token)
+    src_ini_files = get_repo_ini_files(src_repo_url, args.source_branch, token, args.use_ssh)
     if not src_ini_files:
         print(colored(f"No .ini files found in {src_proj_display} on branch/commit {args.source_branch}", "red"))
         sys.exit(1)
@@ -1579,13 +1577,13 @@ def run_interactive_mode(gitlab_url: str, token: str, config: dict):
     branch_to_use = args.original_target_branch if hasattr(args, 'original_target_branch') else args.target_branch
     print(colored(f"Listing files from branch: {branch_to_use}", "yellow"))
     
-    tgt_ini_files = get_repo_ini_files(tgt_repo_url, branch_to_use, token)
+    tgt_ini_files = get_repo_ini_files(tgt_repo_url, branch_to_use, token, args.use_ssh)
     if not tgt_ini_files:
         print(colored(f"No .ini files found in {tgt_proj_display} on branch {branch_to_use}", "red"))
         # Try to list files from develop if no files found in the target branch
         if branch_to_use != 'develop':
             print(colored("Trying to list files from 'develop' branch...", "yellow"))
-            tgt_ini_files = get_repo_ini_files(tgt_repo_url, 'develop', token)
+            tgt_ini_files = get_repo_ini_files(tgt_repo_url, 'develop', token, args.use_ssh)
             if tgt_ini_files:
                 print(colored(f"Found {len(tgt_ini_files)} .ini files in 'develop' branch", "green"))
         
